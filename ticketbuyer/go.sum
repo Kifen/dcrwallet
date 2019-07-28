@@ -88,6 +88,7 @@ github.com/decred/dcrd/gcs v1.0.1 h1:MpJXLskT41+JDaD3RLdlSlF2vlu1sxPpZgiRI7FVTWw
 github.com/decred/dcrd/gcs v1.0.1/go.mod h1:YwutGzusSdJM79CJtxCo9t7WRCvnkLtWSD19TPo1i9g=
 github.com/decred/dcrd/gcs v1.0.2 h1:wZjxeC9WPBoRApaAQpBrzvN9NA0iS2KWrTJa9IiDgc8=
 github.com/decred/dcrd/gcs v1.0.2/go.mod h1:eLCvrzUsWro48TlTyrmFcZAZqnllYFz0vEv5VZtufF4=
+github.com/decred/dcrd/gcs v1.1.0/go.mod h1:yBjhj217Vw5lw3aKnCdHip7fYb9zwMos8bCy5s79M9w=
 github.com/decred/dcrd/hdkeychain/v2 v2.0.0 h1:b6GklXT+LeDumc0bDqMHkss+p2Bu+mgiUDhjAX01LOc=
 github.com/decred/dcrd/hdkeychain/v2 v2.0.0/go.mod h1:tG+VpXfloIkNGHGd6NeoTElHWA68Wf1aP87zegXDGEw=
 github.com/decred/dcrd/rpc/jsonrpc/types v1.0.0 h1:d5ptnjuSADTQMa3i83VpeJNoMRTOJZZBqk7P+E41VXM=

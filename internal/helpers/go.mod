@@ -4,3 +4,5 @@ require (
 	github.com/decred/dcrd/dcrutil v1.2.0
 	github.com/decred/dcrd/wire v1.2.0
 )
+
+go 1.13
