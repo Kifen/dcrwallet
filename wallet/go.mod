@@ -1,11 +1,19 @@
 module github.com/decred/dcrwallet/wallet/v3
 
 require (
+<<<<<<< HEAD
 	github.com/decred/dcrd/blockchain v1.2.0 // indirect
 	github.com/decred/dcrd/blockchain/stake/v2 v2.0.1
 	github.com/decred/dcrd/blockchain/standalone v1.0.0
 	github.com/decred/dcrd/blockchain/v2 v2.0.2
 	github.com/decred/dcrd/chaincfg/chainhash v1.0.2
+=======
+	github.com/decred/dcrd/blockchain v1.1.1
+	github.com/decred/dcrd/blockchain/stake/v2 v2.0.0
+	github.com/decred/dcrd/blockchain/standalone v1.0.0
+	github.com/decred/dcrd/chaincfg v1.5.2
+	github.com/decred/dcrd/chaincfg/chainhash v1.0.1
+>>>>>>> 3afb10a... Use blockchain/standalone module
 	github.com/decred/dcrd/chaincfg/v2 v2.2.0
 	github.com/decred/dcrd/dcrec v1.0.0
 	github.com/decred/dcrd/dcrec/secp256k1 v1.0.2
@@ -34,3 +42,8 @@ replace github.com/decred/dcrwallet/rpc/client/dcrd => ../rpc/client/dcrd
 replace github.com/decred/dcrwallet/deployments/v2 => ../deployments
 
 replace github.com/decred/dcrwallet/validate => ../validate
+<<<<<<< HEAD
+
+go 1.13
+=======
+>>>>>>> 3afb10a... Use blockchain/standalone module

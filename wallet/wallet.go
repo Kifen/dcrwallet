@@ -4369,7 +4369,15 @@ func Open(cfg *Config) (*Wallet, error) {
 		disableCoinTypeUpgrades: cfg.DisableCoinTypeUpgrades,
 
 		// Chain params
+<<<<<<< HEAD
+<<<<<<< HEAD
 		subsidyCache: blockchain.NewSubsidyCache(cfg.Params),
+=======
+		subsidyCache: blockchain.NewSubsidyCache(0, compat.Params2to1(cfg.Params)),
+>>>>>>> 9b112cb... Update to latest dcrd modules
+=======
+		subsidyCache: blockchain.NewSubsidyCache(cfg.Params),
+>>>>>>> 3afb10a... Use blockchain/standalone module
 		chainParams:  cfg.Params,
 
 		lockedOutpoints: map[wire.OutPoint]struct{}{},

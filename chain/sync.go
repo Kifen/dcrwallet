@@ -42,7 +42,6 @@ type Syncer struct {
 	sidechains   wallet.SidechainForest
 	sidechainsMu sync.Mutex
 	relevantTxs  map[chainhash.Hash][]*wire.MsgTx
-
 	cb *Callbacks
 }
 
@@ -398,6 +397,7 @@ func (s *Syncer) Run(ctx context.Context) (err error) {
 		s.sidechainsMu.Lock()
 		bestChain, err := s.wallet.EvaluateBestChain(&s.sidechains)
 		s.sidechainsMu.Unlock()
+		bestChain, err := s.wallet.EvaluateBestChain(&s.sidechains)
 		if err != nil {
 			return err
 		}
@@ -413,6 +413,7 @@ func (s *Syncer) Run(ctx context.Context) (err error) {
 		s.sidechainsMu.Lock()
 		prevChain, err := s.wallet.ChainSwitch(ctx, &s.sidechains, bestChain, nil)
 		s.sidechainsMu.Unlock()
+		prevChain, err := s.wallet.ChainSwitch(&s.sidechains, bestChain, nil)
 		if err != nil {
 			return err
 		}
@@ -590,10 +591,8 @@ func (s *Syncer) blockConnected(ctx context.Context, params json.RawMessage) err
 	if err != nil {
 		return err
 	}
-
 	s.sidechainsMu.Lock()
 	defer s.sidechainsMu.Unlock()
-
 	blockNode := wallet.NewBlockNode(header, &blockHash, filter)
 	s.sidechains.AddBlockNode(blockNode)
 	s.relevantTxs[blockHash] = relevant

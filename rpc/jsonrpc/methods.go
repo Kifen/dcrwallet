@@ -12,6 +12,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"math/big"
 	"strings"
 	"sync"
@@ -32,6 +33,7 @@ import (
 	"github.com/decred/dcrwallet/p2p/v2"
 	"github.com/decred/dcrwallet/rpc/client/dcrd"
 	"github.com/decred/dcrwallet/rpc/jsonrpc/types"
+	"github.com/decred/dcrwallet/spv/v3"
 	"github.com/decred/dcrwallet/version"
 	"github.com/decred/dcrwallet/wallet/v3"
 	"github.com/decred/dcrwallet/wallet/v3/txrules"
@@ -132,6 +134,7 @@ var handlers = map[string]handler{
 	// Extensions to the reference client JSON-RPC API
 	"getbestblock":     {fn: (*Server).getBestBlock},
 	"createnewaccount": {fn: (*Server).createNewAccount},
+	"getpeerinfo":      {fn: (*Server).getPeerInfo},
 	// This was an extension but the reference implementation added it as
 	// well, but with a different API (no account parameter).  It's listed
 	// here because it hasn't been update to use the reference
@@ -1385,6 +1388,53 @@ func (s *Server) getMasterPubkey(ctx context.Context, icmd interface{}) (interfa
 		return nil, err
 	}
 	return masterPubKey.String(), nil
+}
+
+// getPeerInfo responds to the getpeerinfo request.
+// It gets the network backend and views the data on remote peers when in spv mode
+func (s *Server) getPeerInfo(ctx context.Context, icmd interface{}) (interface{}, error) {
+	w, ok := s.walletLoader.LoadedWallet()
+	if !ok {
+		return nil, errUnloadedWallet
+	}
+	n, err := w.NetworkBackend()
+
+	if err != nil {
+		return nil, err
+	}
+
+	syncer, ok := n.(*spv.Syncer)
+
+	if ok {
+		infos := make([]*dcrdtypes.GetPeerInfoResult, 0, len(syncer.GetRemotePeers()))
+		for _, rp := range syncer.GetRemotePeers() {
+			snapshot := rp.StatsSnapshot()
+			info := &dcrdtypes.GetPeerInfoResult{
+				ID:             int32(snapshot.Id),
+				Addr:           snapshot.Addr,
+				AddrLocal:      snapshot.AddrLocal,
+				Services:       fmt.Sprintf("%08d", uint64(snapshot.Services)),
+				RelayTxes:      !snapshot.RelayTxes,
+				LastSend:       snapshot.LastSend.Unix(),
+				LastRecv:       snapshot.LastRecv.Unix(),
+				BytesSent:      snapshot.BytesSent,
+				BytesRecv:      snapshot.BytesRecv,
+				ConnTime:       snapshot.ConnTime.Unix(),
+				TimeOffset:     snapshot.TimeOffset,
+				PingTime:       float64(snapshot.LastPingMicros),
+				Version:        snapshot.Version,
+				SubVer:         snapshot.UserAgent,
+				Inbound:        snapshot.Inbound,
+				StartingHeight: int64(snapshot.InitHeight),
+				CurrentHeight:  snapshot.LastBlock,
+				BanScore:       snapshot.Banscore,
+			}
+			infos = append(infos, info)
+		}
+		return infos, nil
+	} else {
+		return nil, nil
+	}
 }
 
 // getStakeInfo gets a large amounts of information about the stake environment
