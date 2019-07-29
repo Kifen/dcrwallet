@@ -1618,7 +1618,16 @@ func createUnsignedVote(ticketHash *chainhash.Hash, ticketPurchase *wire.MsgTx,
 		stake.TxSStxStakeOutputInfo(ticketPurchase)
 
 	// Calculate the subsidy for votes at this height.
+<<<<<<< HEAD
+<<<<<<< HEAD
 	subsidy := subsidyCache.CalcStakeVoteSubsidy(int64(blockHeight))
+=======
+	subsidy := blockchain.CalcStakeVoteSubsidy(subsidyCache, int64(blockHeight),
+		compat.Params2to1(params))
+>>>>>>> 9b112cb... Update to latest dcrd modules
+=======
+	subsidy := subsidyCache.CalcStakeVoteSubsidy(int64(blockHeight))
+>>>>>>> 3afb10a... Use blockchain/standalone module
 
 	// Calculate the output values from this vote using the subsidy.
 	voteRewardValues := stake.CalculateRewards(ticketValues,

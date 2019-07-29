@@ -5,3 +5,5 @@ require (
 	github.com/decred/dcrwallet/errors v1.0.1
 	github.com/decred/dcrwallet/pgpwordlist v1.0.0
 )
+
+go 1.13

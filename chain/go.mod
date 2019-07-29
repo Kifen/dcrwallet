@@ -19,3 +19,5 @@ replace github.com/decred/dcrwallet/rpc/client/dcrd => ../rpc/client/dcrd
 replace github.com/decred/dcrwallet/deployments/v2 => ../deployments
 
 replace github.com/decred/dcrwallet/validate => ../validate
+
+go 1.13
