@@ -70,6 +70,7 @@ type RemotePeer struct {
 	raddr      net.Addr
 	na         *wire.NetAddress
 
+	statsMu sync.Mutex
 	// io
 	c       net.Conn
 	mr      msgReader
@@ -117,6 +118,38 @@ type LocalPeer struct {
 
 	rpByID map[uint64]*RemotePeer
 	rpMu   sync.Mutex
+}
+
+type SnapShot struct {
+	Id			uint64
+	Ua			string
+	Services	wire.ServiceFlag
+	Raddr		net.Addr
+	Pver		uint32
+	InitHeight	int32
+	Na			*wire.NetAddress
+	C 			net.Conn
+	SendHeaders  bool
+}
+
+func (rp *RemotePeer) StatsSnapshot() *SnapShot {
+	rp.statsMu.Lock()
+	id := rp.id
+
+	snapshot := &SnapShot{
+		Id:				id,
+		C:				rp.c,
+		Ua:				rp.UA(),
+		Services:		rp.Services(),
+		Pver:			rp.pver,
+		InitHeight:		rp.InitialHeight(),
+		SendHeaders: 	rp.sendheaders,
+		Raddr:			rp.RemoteAddr(),
+		Na:				rp.NA(),
+	}
+	rp.statsMu.Unlock()
+
+	return snapshot
 }
 
 // NewLocalPeer creates a LocalPeer that is externally reachable to remote peers
