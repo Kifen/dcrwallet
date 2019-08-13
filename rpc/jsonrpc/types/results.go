@@ -5,6 +5,10 @@
 
 package types
 
+import (
+	"github.com/decred/dcrd/wire"
+)
+
 // FundRawTransactionResult models the data from the fundrawtransaction command.
 type FundRawTransactionResult struct {
 	Hex string  `json:"hex"`
@@ -67,6 +71,18 @@ type GetMultisigOutInfoResult struct {
 // command.
 type GetPayToContractHashResult struct {
 	Address string `json:"address"`
+}
+
+// GetPeerInfoResult models the data returned from the getpeerinfo
+// command
+type GetPeerInfoResult struct {
+	Id         uint64           `json:"id"`
+	AddrLocal  string           `json:"addrlocal,omitempty"`
+	UA         string           `json:"user_agent"`
+	Services   wire.ServiceFlag `json:"services"`
+	Pver       uint32           `json:"pver"`
+	InitHeight int32            `json:"initial_height"`
+	Raddr      string           `json:"remote_address"`
 }
 
 // GetStakeInfoResult models the data returned from the getstakeinfo

@@ -133,8 +133,8 @@ var handlers = map[string]handler{
 
 	// Extensions to the reference client JSON-RPC API
 	"getbestblock":     {fn: (*Server).getBestBlock},
-	"createnewaccount": {fn: (*Server).createNewAccount},
 	"getpeerinfo":      {fn: (*Server).getPeerInfo},
+	"createnewaccount": {fn: (*Server).createNewAccount},
 	// This was an extension but the reference implementation added it as
 	// well, but with a different API (no account parameter).  It's listed
 	// here because it hasn't been update to use the reference
@@ -1393,6 +1393,7 @@ func (s *Server) getMasterPubkey(ctx context.Context, icmd interface{}) (interfa
 // getPeerInfo responds to the getpeerinfo request.
 // It gets the network backend and views the data on remote peers when in spv mode
 func (s *Server) getPeerInfo(ctx context.Context, icmd interface{}) (interface{}, error) {
+
 	w, ok := s.walletLoader.LoadedWallet()
 	if !ok {
 		return nil, errUnloadedWallet
@@ -1692,7 +1693,6 @@ func (s *Server) getWalletFee(ctx context.Context, icmd interface{}) (interface{
 
 var helpDescs map[string]string
 var helpDescsMu sync.Mutex // Help may execute concurrently, so synchronize access.
-
 // help handles the help request by returning one line usage of all available
 // methods, or full help for a specific method.  The chainClient is optional,
 // and this is simply a helper function for the HelpNoChainRPC and
