@@ -20,23 +20,12 @@ github.com/decred/dcrd/blockchain/stake v1.2.1 h1:Llj+mKNJEnMskeakMj62hllNVtiHF2
 github.com/decred/dcrd/blockchain/stake v1.2.1/go.mod h1:3YGhsM2WCwUM6o0WLGoTCUXLOOw6H7tqXtVtWlcCE/Y=
 github.com/decred/dcrd/blockchain/stake/v2 v2.0.0 h1:+FMrSt5tPicBKlev0k/r/2VsaVwpIUcm1TPw69XgZw0=
 github.com/decred/dcrd/blockchain/stake/v2 v2.0.0/go.mod h1:jv/rKMcZ87lhvVkHot/tElxeAYEUJ3mnKPHJ7WPq86U=
-<<<<<<< HEAD
 github.com/decred/dcrd/blockchain/stake/v2 v2.0.1 h1:mAPZZA+Or8NPENheejmD6Fl90uykhurVuEdOBUMl35s=
 github.com/decred/dcrd/blockchain/stake/v2 v2.0.1/go.mod h1:jv/rKMcZ87lhvVkHot/tElxeAYEUJ3mnKPHJ7WPq86U=
 github.com/decred/dcrd/blockchain/standalone v1.0.0 h1:bPkFgSV7/NeZI+ZEGhaOP+XccCUBTIJb3YTf8dMwe8g=
 github.com/decred/dcrd/blockchain/standalone v1.0.0/go.mod h1:U5lOleFSi1nL7heSdLgEtuvg0udS1p3cvHxvLJbihfE=
 github.com/decred/dcrd/blockchain/v2 v2.0.2 h1:wMbrKBYxP8MFMxotYKPIP69IuI1dUK6jCiKdJ37oxeY=
 github.com/decred/dcrd/blockchain/v2 v2.0.2/go.mod h1:tAY/BejMCsa7ebIkyyhRefdQI35cFOMQ7B00x1+8vRQ=
-=======
-github.com/decred/dcrd/blockchain/standalone v1.0.0 h1:bPkFgSV7/NeZI+ZEGhaOP+XccCUBTIJb3YTf8dMwe8g=
-github.com/decred/dcrd/blockchain/standalone v1.0.0/go.mod h1:U5lOleFSi1nL7heSdLgEtuvg0udS1p3cvHxvLJbihfE=
-github.com/decred/dcrd/chaincfg v1.1.1 h1:qRZkiA7ucsfsQPE/G/U1OnEUFozDl1MvM4ysJCUndLU=
-github.com/decred/dcrd/chaincfg v1.1.1/go.mod h1:UlGtnp8Xx9YK+etBTybGjoFGoGXSw2bxZQuAnwfKv6I=
-github.com/decred/dcrd/chaincfg v1.2.0 h1:Vj0xr85wmqOdQDxKLkpP9TqwK1RykqY2eC0fWcCsl0k=
-github.com/decred/dcrd/chaincfg v1.2.0/go.mod h1:kpoGTMIriKn5hHRSu5b65+Q9LlGUdbQcMzGujac1BVs=
-github.com/decred/dcrd/chaincfg v1.4.0 h1:dIJhXQooiVW5AVZ0c4brylsiwkc8KSawpZ3NPq+LxWY=
-github.com/decred/dcrd/chaincfg v1.4.0/go.mod h1:ypuM30F+XgZmZTFfAkWHWd0lwwkWWAOAQYNRkRDlYLc=
->>>>>>> 3afb10a... Use blockchain/standalone module
 github.com/decred/dcrd/chaincfg v1.5.1 h1:u1Xbq0VTnAXIHW5ECqrWe0VYSgf5vWHqpSiwoLBzxAQ=
 github.com/decred/dcrd/chaincfg v1.5.1/go.mod h1:FukMzTjkwzjPU+hK7CqDMQe3NMbSZAYU5PAcsx1wlv0=
 github.com/decred/dcrd/chaincfg v1.5.2 h1:dd6l9rqcpxg2GF5neBmE2XxRc5Lqda45fWmN4XOJRW8=
@@ -51,17 +40,10 @@ github.com/decred/dcrd/chaincfg/v2 v2.1.0 h1:2S7TL9YWnKDDiH5bTpp3xcBo+1gl1IXFi5K
 github.com/decred/dcrd/chaincfg/v2 v2.1.0/go.mod h1:hpKvhLCDAD/xDZ3V1Pqpv9fIKVYYi11DyxETguazyvg=
 github.com/decred/dcrd/chaincfg/v2 v2.2.0 h1:SBkoqeM9+CkMA1V3i3Ffc4gAC4TqN2EoSRw5kjGkvx4=
 github.com/decred/dcrd/chaincfg/v2 v2.2.0/go.mod h1:hpKvhLCDAD/xDZ3V1Pqpv9fIKVYYi11DyxETguazyvg=
-<<<<<<< HEAD
 github.com/decred/dcrd/crypto/blake256 v1.0.0 h1:/8DMNYp9SGi5f0w7uCm6d6M4OU2rGFK09Y2A4Xv7EE0=
 github.com/decred/dcrd/crypto/blake256 v1.0.0/go.mod h1:sQl2p6Y26YV+ZOcSTP6thNdn47hh8kt6rqSlvmrXFAc=
 github.com/decred/dcrd/database v1.1.0 h1:A9doThqEjOiE8NicDbMmRwr74itM47rcOzzWpy+keYU=
 github.com/decred/dcrd/database v1.1.0/go.mod h1:/c8suHgDP20weTDFpObwvNbrMMlxn2LM4Tvm377ztwQ=
-=======
-github.com/decred/dcrd/database v1.0.1 h1:BSIerNf4RhSA0iDhiE/320RYqD2y9T+SCj99Pv7svgo=
-github.com/decred/dcrd/database v1.0.1/go.mod h1:ILCeyOHFew3fZ7K2B9jl+tp5qFOap/pEGoo6Yy6Wk0g=
-github.com/decred/dcrd/database v1.0.3 h1:e5Q3gDt9LwfvpZxYqFF3OVzgr8bGeC1cen+V3mv/CCw=
-github.com/decred/dcrd/database v1.0.3/go.mod h1:TLxRwIV8x85+dxPTLAWu4mHg45TkKrrza5xzwOS1QtA=
->>>>>>> 3afb10a... Use blockchain/standalone module
 github.com/decred/dcrd/database/v2 v2.0.0 h1:KWiyZHk+QyNKQvvxm/KpIejhTqYJqH9ssz1+9sT9nVA=
 github.com/decred/dcrd/database/v2 v2.0.0/go.mod h1:Sj2lvTRB0mfSu9uD7ObfwCY/eJ954GFU/X+AndJIyfE=
 github.com/decred/dcrd/dcrec v1.0.0 h1:W+z6Es+Rai3MXYVoPAxYr5U1DGis0Co33scJ6uH2J6o=
