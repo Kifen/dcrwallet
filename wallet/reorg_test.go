@@ -14,7 +14,6 @@ import (
 	"github.com/decred/dcrd/chaincfg/v2"
 	"github.com/decred/dcrd/gcs/blockcf"
 	"github.com/decred/dcrd/wire"
-	"github.com/decred/dcrwallet/wallet/v3/internal/compat"
 )
 
 type tg struct {
@@ -33,7 +32,7 @@ type gblock struct {
 }
 
 func maketg(t *testing.T, params *chaincfg.Params) *tg {
-	g, err := chaingen.MakeGenerator(compat.Params2to1(params))
+	g, err := chaingen.MakeGenerator(params)
 	if err != nil {
 		t.Fatal(err)
 	}
