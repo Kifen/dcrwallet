@@ -132,19 +132,19 @@ var helpDescsEnUS = map[string]string{
 	"getmultisigoutinforesult-redeemscript": "Hex of the redeeming script.",
 	"getmultisigoutinforesult-address":      "Script address.",
 
-	//GetSpvPeerInfo help.
-	"getspvpeerinfo--synopsis": "Returns data on remote peers when in spv mode.",
+	//GetPeerInfo help.
+	"getpeerinfo--synopsis": "Returns data on remote peers when in spv mode.",
 
-	// GetSpvPeerInfoResult help
-	"getspvpeerinforesult-id":      			"Id of peer.",
-	"getspvpeerinforesult-user-agent":          "Current user agent.",
-	"getspvpeerinforesult-services":       	 	"",
-	"getspvpeerinforesult-pver":    		    "",
-	"getspvpeerinforesult-initial-height":     	"",
-	"getspvpeerinforesult-connection":          "",
-	"getspvpeerinforesult-send headers":        "",
-	"getspvpeerinforesult-remote-address":   	"Remote address of peer",
-	"getspvpeerinforesult-net-address":   		"Net address of peer",
+	// GetPeerInfoResult help
+	"getpeerinforesult-id":             "Id of peer.",
+	"getpeerinforesult-addrlocal":      "",
+	"getpeerinforesult-user_agent":     "Current user agent.",
+	"getpeerinforesult-services":       "",
+	"getpeerinforesult-pver":           "",
+	"getpeerinforesult-initial_height": "",
+	"getpeerinforesult-connection":     "",
+	"getpeerinforesult-send_headers":   "",
+	"getpeerinforesult-remote_address": "Remote address of peer",
 
 	// GetStakeInfo help.
 	"getstakeinfo--synopsis": "Returns statistics about staking from the wallet.",

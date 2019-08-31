@@ -121,31 +121,28 @@ type LocalPeer struct {
 }
 
 type SnapShot struct {
-	Id			uint64
-	Ua			string
-	Services	wire.ServiceFlag
-	Raddr		net.Addr
-	Pver		uint32
-	InitHeight	int32
-	Na			*wire.NetAddress
-	C 			net.Conn
-	SendHeaders  bool
+	Id         uint64
+	Ua         string
+	Services   wire.ServiceFlag
+	Raddr      string
+	AddrLocal  string
+	Pver       uint32
+	InitHeight int32
 }
 
 func (rp *RemotePeer) StatsSnapshot() *SnapShot {
 	rp.statsMu.Lock()
 	id := rp.id
+	addrLocal := rp.c.LocalAddr().String()
 
 	snapshot := &SnapShot{
-		Id:				id,
-		C:				rp.c,
-		Ua:				rp.UA(),
-		Services:		rp.Services(),
-		Pver:			rp.pver,
-		InitHeight:		rp.InitialHeight(),
-		SendHeaders: 	rp.sendheaders,
-		Raddr:			rp.RemoteAddr(),
-		Na:				rp.NA(),
+		Id:         id,
+		Raddr:      rp.RemoteAddr().String(),
+		AddrLocal:  addrLocal,
+		Ua:         rp.UA(),
+		Services:   rp.Services(),
+		Pver:       rp.pver,
+		InitHeight: rp.InitialHeight(),
 	}
 	rp.statsMu.Unlock()
 

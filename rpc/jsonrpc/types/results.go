@@ -4,9 +4,8 @@
 // license that can be found in the LICENSE file.
 
 package types
-import (
-	"net"
 
+import (
 	"github.com/decred/dcrd/wire"
 )
 
@@ -74,18 +73,16 @@ type GetPayToContractHashResult struct {
 	Address string `json:"address"`
 }
 
-// GetSpvPeerInfoResult models the data returned from the getspvpeerinfo
+// GetPeerInfoResult models the data returned from the getspvpeerinfo
 // command
-type GetSpvPeerInfoResult struct {
-	Id				uint64				`json:"id"`
-	UA				string				`json:"user agent"`
-	Services		wire.ServiceFlag	`json:"services"`
-	Pver			uint32				`json:"pver"`
-	InitHeight		int32				`json:"initial height"`
-	C				net.Conn			`json:"connection"`
-	Sendheaders		bool				`json:"send headers"`
-	Raddr			net.Addr			`json:"remote address"`
-	//NA				*wire.NetAddress	`json:"net address"`
+type GetPeerInfoResult struct {
+	Id         uint64           `json:"id"`
+	AddrLocal  string           `json:"addrlocal,omitempty"`
+	UA         string           `json:"user_agent"`
+	Services   wire.ServiceFlag `json:"services"`
+	Pver       uint32           `json:"pver"`
+	InitHeight int32            `json:"initial_height"`
+	Raddr      string           `json:"remote_address"`
 }
 
 // GetStakeInfoResult models the data returned from the getstakeinfo
