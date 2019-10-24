@@ -16,6 +16,12 @@ import (
 // Method describes the exact type used when registering methods with dcrjson.
 type Method string
 
+// AbandonTransactionCmd describes the command and parameters for performing the
+// abandontransaction method.
+type AbandonTransactionCmd struct {
+	Hash string `json:"hash"`
+}
+
 // AccountAddressIndexCmd is a type handling custom marshaling and
 // unmarshaling of accountaddressindex JSON wallet extension
 // commands.
@@ -1260,6 +1266,21 @@ func NewWalletPassphraseChangeCmd(oldPassphrase, newPassphrase string) *WalletPa
 	}
 }
 
+// WalletPubPassphraseChangeCmd defines the walletpubpassphrasechange JSON-RPC command.
+type WalletPubPassphraseChangeCmd struct {
+	OldPassphrase string
+	NewPassphrase string
+}
+
+// NewWalletPubPassphraseChangeCmd returns a new instance which can be used to
+// issue a walletpubpassphrasechange JSON-RPC command.
+func NewWalletPubPassphraseChangeCmd(oldPassphrase, newPassphrase string) *WalletPubPassphraseChangeCmd {
+	return &WalletPubPassphraseChangeCmd{
+		OldPassphrase: oldPassphrase,
+		NewPassphrase: newPassphrase,
+	}
+}
+
 type registeredMethod struct {
 	method string
 	cmd    interface{}
@@ -1270,6 +1291,7 @@ func init() {
 
 	// Wallet-specific methods
 	register := []registeredMethod{
+		{"abandontransaction", (*AbandonTransactionCmd)(nil)},
 		{"accountaddressindex", (*AccountAddressIndexCmd)(nil)},
 		{"accountsyncaddressindex", (*AccountSyncAddressIndexCmd)(nil)},
 		{"addmultisigaddress", (*AddMultisigAddressCmd)(nil)},
@@ -1339,6 +1361,7 @@ func init() {
 		{"walletlock", (*WalletLockCmd)(nil)},
 		{"walletpassphrase", (*WalletPassphraseCmd)(nil)},
 		{"walletpassphrasechange", (*WalletPassphraseChangeCmd)(nil)},
+		{"walletpubpassphrasechange", (*WalletPubPassphraseChangeCmd)(nil)},
 	}
 	for i := range register {
 		dcrjson.MustRegister(register[i].method, register[i].cmd, dcrjsonv2WalletOnly)

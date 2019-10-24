@@ -8,6 +8,10 @@
 package rpchelp
 
 var helpDescsEnUS = map[string]string{
+	// AbandonTransactionCmd help.
+	"abandontransaction--synopsis": "Remove an unconfirmed transaction and all dependent transactions",
+	"abandontransaction-hash":      "Hash of transaction to remove",
+
 	// AccountAddressIndexCmd help.
 	"accountaddressindex--synopsis": "Get the current address index for some account branch",
 	"accountaddressindex-account":   "String for the account",
@@ -541,6 +545,11 @@ var helpDescsEnUS = map[string]string{
 	"walletpassphrase--synopsis":  "Unlock the wallet.",
 	"walletpassphrase-passphrase": "The wallet passphrase",
 	"walletpassphrase-timeout":    "The number of seconds to wait before the wallet automatically locks",
+
+	//WalletPubPassPhraseChangeCmd help
+	"walletpubpassphrasechange--synopsis":     "Change the wallet's public passphrase.",
+	"walletpubpassphrasechange-oldpassphrase": "The old wallet passphrase",
+	"walletpubpassphrasechange-newpassphrase": "The new wallet passphrase",
 
 	// WalletPassphraseChangeCmd help.
 	"walletpassphrasechange--synopsis":     "Change the wallet passphrase.",
