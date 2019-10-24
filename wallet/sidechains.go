@@ -5,15 +5,16 @@
 package wallet
 
 import (
+	"context"
 	"math/big"
 	"sort"
 
-	"github.com/decred/dcrd/blockchain"
+	blockchain "github.com/decred/dcrd/blockchain/standalone"
 	"github.com/decred/dcrd/chaincfg/chainhash"
 	"github.com/decred/dcrd/chaincfg/v2"
 	"github.com/decred/dcrd/gcs"
 	"github.com/decred/dcrd/wire"
-	"github.com/decred/dcrwallet/errors"
+	"github.com/decred/dcrwallet/errors/v2"
 	"github.com/decred/dcrwallet/wallet/v3/walletdb"
 )
 
@@ -243,10 +244,10 @@ func (f *SidechainForest) PruneTree(root *chainhash.Hash) {
 // EvaluateBestChain returns block nodes to create the best main chain.  These
 // may extend the main chain or require a reorg.  An empty slice indicates there
 // is no better chain.
-func (w *Wallet) EvaluateBestChain(f *SidechainForest) ([]*BlockNode, error) {
+func (w *Wallet) EvaluateBestChain(ctx context.Context, f *SidechainForest) ([]*BlockNode, error) {
 	const op errors.Op = "wallet.EvaluateBestChain"
 	var newBestChain []*BlockNode
-	err := walletdb.View(w.db, func(dbtx walletdb.ReadTx) error {
+	err := walletdb.View(ctx, w.db, func(dbtx walletdb.ReadTx) error {
 		ns := dbtx.ReadBucket(wtxmgrNamespaceKey)
 		tipHash, _ := w.TxStore.MainChainTip(ns)
 		tipHeader, err := w.TxStore.GetBlockHeader(dbtx, &tipHash)

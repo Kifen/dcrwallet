@@ -10,11 +10,11 @@ package validate
 import (
 	"bytes"
 
-	"github.com/decred/dcrd/blockchain"
+	blockchain "github.com/decred/dcrd/blockchain/standalone"
 	"github.com/decred/dcrd/gcs"
 	"github.com/decred/dcrd/gcs/blockcf"
 	"github.com/decred/dcrd/wire"
-	"github.com/decred/dcrwallet/errors"
+	"github.com/decred/dcrwallet/errors/v2"
 )
 
 // MerkleRoots recreates the merkle roots of regular and stake transactions from
@@ -23,17 +23,36 @@ import (
 func MerkleRoots(block *wire.MsgBlock) error {
 	const opf = "validate.MerkleRoots(%v)"
 
-	merkles := blockchain.BuildMsgTxMerkleTreeStore(block.Transactions)
-	if block.Header.MerkleRoot != *merkles[len(merkles)-1] {
+	mroot := blockchain.CalcTxTreeMerkleRoot(block.Transactions)
+	if block.Header.MerkleRoot != mroot {
 		blockHash := block.BlockHash()
 		op := errors.Opf(opf, &blockHash)
 		return errors.E(op, errors.Consensus, "invalid regular merkle root")
 	}
-	merkles = blockchain.BuildMsgTxMerkleTreeStore(block.STransactions)
-	if block.Header.StakeRoot != *merkles[len(merkles)-1] {
+	mroot = blockchain.CalcTxTreeMerkleRoot(block.STransactions)
+	if block.Header.StakeRoot != mroot {
 		blockHash := block.BlockHash()
 		op := errors.Opf(opf, &blockHash)
 		return errors.E(op, errors.Consensus, "invalid stake merkle root")
+	}
+
+	return nil
+}
+
+// DCP0005MerkleRoot recreates the combined regular and stake transaction merkle
+// root and compares it against the merkle root in the block header.
+//
+// DCP0005 (https://github.com/decred/dcps/blob/master/dcp-0005/dcp-0005.mediawiki)
+// describes (among other changes) the hard forking change which combined the
+// individual regular and stake merkle roots into a single root.
+func DCP0005MerkleRoot(block *wire.MsgBlock) error {
+	const opf = "validate.DCP0005MerkleRoot(%v)"
+
+	mroot := blockchain.CalcCombinedTxTreeMerkleRoot(block.Transactions, block.STransactions)
+	if block.Header.MerkleRoot != mroot {
+		blockHash := block.BlockHash()
+		op := errors.Opf(opf, &blockHash)
+		return errors.E(op, errors.Consensus, "invalid combined merkle root")
 	}
 
 	return nil

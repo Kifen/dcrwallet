@@ -10,15 +10,15 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"net"
+	"runtime/trace"
 	"sync"
 	"sync/atomic"
 
 	"github.com/decred/dcrd/chaincfg/chainhash"
 	"github.com/decred/dcrd/wire"
-	"github.com/decred/dcrwallet/errors"
+	"github.com/decred/dcrwallet/errors/v2"
 	"github.com/decred/dcrwallet/rpc/client/dcrd"
 	"github.com/decred/dcrwallet/wallet/v3"
-	"github.com/decred/go-socks/socks"
 	"github.com/jrick/wsrpc/v2"
 	"golang.org/x/sync/errgroup"
 )
@@ -53,9 +53,7 @@ type RPCOptions struct {
 	DefaultPort string
 	User        string
 	Pass        string
-	Proxy       string
-	ProxyUser   string
-	ProxyPass   string
+	Dial        func(ctx context.Context, network, address string) (net.Conn, error)
 	CA          []byte
 	Insecure    bool
 }
@@ -226,13 +224,8 @@ func (s *Syncer) Run(ctx context.Context) (err error) {
 	opts := make([]wsrpc.Option, 0, 4)
 	opts = append(opts, wsrpc.WithBasicAuth(s.opts.User, s.opts.Pass))
 	opts = append(opts, wsrpc.WithNotifier(s.notifier))
-	if s.opts.Proxy != "" {
-		proxy := &socks.Proxy{
-			Addr:     s.opts.Proxy,
-			Username: s.opts.ProxyUser,
-			Password: s.opts.ProxyPass,
-		}
-		opts = append(opts, wsrpc.WithDial(proxy.DialContext))
+	if s.opts.Dial != nil {
+		opts = append(opts, wsrpc.WithDial(s.opts.Dial))
 	}
 	if len(s.opts.CA) != 0 && !s.opts.Insecure {
 		pool := x509.NewCertPool()
@@ -246,6 +239,7 @@ func (s *Syncer) Run(ctx context.Context) (err error) {
 	if err != nil {
 		return err
 	}
+	defer client.Close()
 	s.rpc = dcrd.New(client)
 
 	// Verify that the server is running on the expected network.
@@ -275,14 +269,14 @@ func (s *Syncer) Run(ctx context.Context) (err error) {
 	s.wallet.SetNetworkBackend(s.rpc)
 	defer s.wallet.SetNetworkBackend(nil)
 
-	tipHash, tipHeight := s.wallet.MainChainTip()
-	rescanPoint, err := s.wallet.RescanPoint()
+	tipHash, tipHeight := s.wallet.MainChainTip(ctx)
+	rescanPoint, err := s.wallet.RescanPoint(ctx)
 	if err != nil {
 		return err
 	}
 	log.Infof("Headers synced through block %v height %d", &tipHash, tipHeight)
 	if rescanPoint != nil {
-		h, err := s.wallet.BlockHeader(rescanPoint)
+		h, err := s.wallet.BlockHeader(ctx, rescanPoint)
 		if err != nil {
 			return err
 		}
@@ -328,7 +322,7 @@ func (s *Syncer) Run(ctx context.Context) (err error) {
 	}
 
 	// Fetch new headers and cfilters from the server.
-	locators, err := s.wallet.BlockLocators(nil)
+	locators, err := s.wallet.BlockLocators(ctx, nil)
 	if err != nil {
 		return err
 	}
@@ -368,7 +362,7 @@ func (s *Syncer) Run(ctx context.Context) (err error) {
 
 		var added int
 		for _, n := range nodes {
-			haveBlock, _, _ := s.wallet.BlockInMainChain(n.Hash)
+			haveBlock, _, _ := s.wallet.BlockInMainChain(ctx, n.Hash)
 			if haveBlock {
 				continue
 			}
@@ -395,7 +389,7 @@ func (s *Syncer) Run(ctx context.Context) (err error) {
 		}
 
 		s.sidechainsMu.Lock()
-		bestChain, err := s.wallet.EvaluateBestChain(&s.sidechains)
+		bestChain, err := s.wallet.EvaluateBestChain(ctx, &s.sidechains)
 		s.sidechainsMu.Unlock()
 		if err != nil {
 			return err
@@ -404,13 +398,13 @@ func (s *Syncer) Run(ctx context.Context) (err error) {
 			continue
 		}
 
-		_, err = s.wallet.ValidateHeaderChainDifficulties(bestChain, 0)
+		_, err = s.wallet.ValidateHeaderChainDifficulties(ctx, bestChain, 0)
 		if err != nil {
 			return err
 		}
 
 		s.sidechainsMu.Lock()
-		prevChain, err := s.wallet.ChainSwitch(&s.sidechains, bestChain, nil)
+		prevChain, err := s.wallet.ChainSwitch(ctx, &s.sidechains, bestChain, nil)
 		s.sidechainsMu.Unlock()
 		if err != nil {
 			return err
@@ -433,14 +427,14 @@ func (s *Syncer) Run(ctx context.Context) (err error) {
 				len(bestChain), tip.Hash, tip.Header.Height, tip.Header.Timestamp)
 		}
 
-		locators, err = s.wallet.BlockLocators(nil)
+		locators, err = s.wallet.BlockLocators(ctx, nil)
 		if err != nil {
 			return err
 		}
 	}
 	s.fetchHeadersFinished()
 
-	rescanPoint, err = s.wallet.RescanPoint()
+	rescanPoint, err = s.wallet.RescanPoint(ctx)
 	if err != nil {
 		return err
 	}
@@ -463,7 +457,7 @@ func (s *Syncer) Run(ctx context.Context) (err error) {
 		}
 
 		s.rescanStart()
-		rescanBlock, err := s.wallet.BlockHeader(rescanPoint)
+		rescanBlock, err := s.wallet.BlockHeader(ctx, rescanPoint)
 		if err != nil {
 			return err
 		}
@@ -531,14 +525,16 @@ type notifier struct {
 func (n *notifier) Notify(method string, params json.RawMessage) error {
 	s := n.syncer
 	op := errors.Op(method)
+	ctx, task := trace.NewTask(n.ctx, method)
+	defer task.End()
 	switch method {
 	case "winningtickets":
-		err := s.winningTickets(n.ctx, params)
+		err := s.winningTickets(ctx, params)
 		if err != nil {
 			log.Error(errors.E(op, err))
 		}
 	case "blockconnected":
-		err := s.blockConnected(n.ctx, params)
+		err := s.blockConnected(ctx, params)
 		if err == nil {
 			n.connectingBlocks = true
 			return nil
@@ -550,12 +546,12 @@ func (n *notifier) Notify(method string, params json.RawMessage) error {
 		}
 		return err
 	case "relevanttxaccepted":
-		err := s.relevantTxAccepted(n.ctx, params)
+		err := s.relevantTxAccepted(ctx, params)
 		if err != nil {
 			log.Error(errors.E(op, err))
 		}
 	case "spentandmissedtickets":
-		err := s.spentAndMissedTickets(n.ctx, params)
+		err := s.spentAndMissedTickets(ctx, params)
 		if err != nil {
 			log.Error(errors.E(op, err))
 		}
@@ -575,7 +571,7 @@ func (s *Syncer) winningTickets(ctx context.Context, params json.RawMessage) err
 	if err != nil {
 		return err
 	}
-	return s.wallet.VoteOnOwnedTickets(winners, block, height)
+	return s.wallet.VoteOnOwnedTickets(ctx, winners, block, height)
 }
 
 func (s *Syncer) blockConnected(ctx context.Context, params json.RawMessage) error {
@@ -597,13 +593,13 @@ func (s *Syncer) blockConnected(ctx context.Context, params json.RawMessage) err
 	s.sidechains.AddBlockNode(blockNode)
 	s.relevantTxs[blockHash] = relevant
 
-	bestChain, err := s.wallet.EvaluateBestChain(&s.sidechains)
+	bestChain, err := s.wallet.EvaluateBestChain(ctx, &s.sidechains)
 	if err != nil {
 		return err
 	}
 	if len(bestChain) != 0 {
 		var prevChain []*wallet.BlockNode
-		prevChain, err = s.wallet.ChainSwitch(&s.sidechains, bestChain, s.relevantTxs)
+		prevChain, err = s.wallet.ChainSwitch(ctx, &s.sidechains, bestChain, s.relevantTxs)
 		if err != nil {
 			return err
 		}
@@ -637,7 +633,7 @@ func (s *Syncer) relevantTxAccepted(ctx context.Context, params json.RawMessage)
 	if err != nil {
 		return err
 	}
-	return s.wallet.AcceptMempoolTx(tx)
+	return s.wallet.AcceptMempoolTx(ctx, tx)
 }
 
 func (s *Syncer) spentAndMissedTickets(ctx context.Context, params json.RawMessage) error {
@@ -645,5 +641,5 @@ func (s *Syncer) spentAndMissedTickets(ctx context.Context, params json.RawMessa
 	if err != nil {
 		return err
 	}
-	return s.wallet.RevokeOwnedTickets(missed)
+	return s.wallet.RevokeOwnedTickets(ctx, missed)
 }

@@ -6,6 +6,7 @@ package wallet
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"io/ioutil"
 	"os"
@@ -145,7 +146,8 @@ func setupWallet(t *testing.T, cfg *Config) (*Wallet, walletdb.DB, func()) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = Create(opaqueDB{db}, pubPassphrase, privPassphrase, seed, cfg.Params)
+	ctx := context.Background()
+	err = Create(ctx, opaqueDB{db}, pubPassphrase, privPassphrase, seed, cfg.Params)
 	if err != nil {
 		db.Close()
 		os.Remove(f.Name())
@@ -153,7 +155,7 @@ func setupWallet(t *testing.T, cfg *Config) (*Wallet, walletdb.DB, func()) {
 	}
 	cfg.DB = opaqueDB{db}
 
-	w, err := Open(cfg)
+	w, err := Open(ctx, cfg)
 	if err != nil {
 		db.Close()
 		os.Remove(f.Name())
@@ -173,9 +175,10 @@ func testExternalAddresses(tc *testContext) {
 	defer teardown()
 
 	prefix := "testExternalAddresses"
+	ctx := context.Background()
 
 	if tc.watchingOnly {
-		err := walletdb.Update(db, func(tx walletdb.ReadWriteTx) error {
+		err := walletdb.Update(ctx, db, func(tx walletdb.ReadWriteTx) error {
 			ns := tx.ReadWriteBucket(waddrmgrBucketKey)
 			return w.Manager.ConvertToWatchingOnly(ns)
 		})
@@ -186,13 +189,13 @@ func testExternalAddresses(tc *testContext) {
 	}
 
 	for i := 0; i < len(expectedExternalAddrs); i++ {
-		addr, err := w.NewExternalAddress(defaultAccount)
+		addr, err := w.NewExternalAddress(context.Background(), defaultAccount)
 		if err != nil {
 			tc.t.Fatalf("%s: failed to generate external address: %v",
 				prefix, err)
 		}
 
-		maddr, err := w.AddressInfo(addr)
+		maddr, err := w.AddressInfo(ctx, addr)
 		if err != nil {
 			tc.t.Errorf("Unexpected error: %v", err)
 		}
@@ -219,7 +222,7 @@ func testExternalAddresses(tc *testContext) {
 				expectedExternalAddrs[i].internal, maddr.Internal())
 		}
 
-		pubKey, err := w.PubKeyForAddress(addr)
+		pubKey, err := w.PubKeyForAddress(ctx, addr)
 		if err != nil {
 			tc.t.Fatalf("%s: failed to get public key for address %s: %v",
 				prefix, addr.String(), err)
@@ -238,9 +241,10 @@ func testInternalAddresses(tc *testContext) {
 	defer teardown()
 
 	prefix := "testInternalAddresses"
+	ctx := context.Background()
 
 	if tc.watchingOnly {
-		err := walletdb.Update(db, func(tx walletdb.ReadWriteTx) error {
+		err := walletdb.Update(ctx, db, func(tx walletdb.ReadWriteTx) error {
 			ns := tx.ReadWriteBucket(waddrmgrBucketKey)
 			return w.Manager.ConvertToWatchingOnly(ns)
 		})
@@ -251,13 +255,13 @@ func testInternalAddresses(tc *testContext) {
 	}
 
 	for i := 0; i < len(expectedInternalAddrs); i++ {
-		addr, err := w.NewInternalAddress(defaultAccount)
+		addr, err := w.NewInternalAddress(context.Background(), defaultAccount)
 		if err != nil {
 			tc.t.Fatalf("%s: failed to generate internal address: %v",
 				prefix, err)
 		}
 
-		maddr, err := w.AddressInfo(addr)
+		maddr, err := w.AddressInfo(ctx, addr)
 		if err != nil {
 			tc.t.Errorf("Unexpected error: %v", err)
 		}
@@ -284,7 +288,7 @@ func testInternalAddresses(tc *testContext) {
 				expectedExternalAddrs[i].internal, maddr.Internal())
 		}
 
-		pubKey, err := w.PubKeyForAddress(addr)
+		pubKey, err := w.PubKeyForAddress(ctx, addr)
 		if err != nil {
 			tc.t.Fatalf("%s: failed to get public key for address %s: %v",
 				prefix, addr.String(), err)
@@ -371,7 +375,7 @@ type accountIndexes [2]struct {
 func nextAddresses(n int) func(t *testing.T, w *Wallet) {
 	return func(t *testing.T, w *Wallet) {
 		for i := 0; i < n; i++ {
-			_, err := w.NewExternalAddress(0)
+			_, err := w.NewExternalAddress(context.Background(), 0)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -380,8 +384,9 @@ func nextAddresses(n int) func(t *testing.T, w *Wallet) {
 }
 
 func watchFutureAddresses(t *testing.T, w *Wallet) {
-	err := walletdb.View(w.db, func(dbtx walletdb.ReadTx) error {
-		return w.watchFutureAddresses(dbtx)
+	ctx := context.Background()
+	err := walletdb.View(ctx, w.db, func(dbtx walletdb.ReadTx) error {
+		return w.watchFutureAddresses(context.Background(), dbtx)
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -389,6 +394,7 @@ func watchFutureAddresses(t *testing.T, w *Wallet) {
 }
 
 func useAddress(child uint32) func(t *testing.T, w *Wallet) {
+	ctx := context.Background()
 	return func(t *testing.T, w *Wallet) {
 		w.addressBuffersMu.Lock()
 		xbranch := w.addressBuffers[0].albExternal.branchXpub
@@ -397,7 +403,7 @@ func useAddress(child uint32) func(t *testing.T, w *Wallet) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		err = walletdb.Update(w.db, func(dbtx walletdb.ReadWriteTx) error {
+		err = walletdb.Update(ctx, w.db, func(dbtx walletdb.ReadWriteTx) error {
 			ns := dbtx.ReadWriteBucket(waddrmgrBucketKey)
 			ma, err := w.Manager.Address(ns, addr)
 			if err != nil {

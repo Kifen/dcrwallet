@@ -16,7 +16,7 @@ import (
 	"github.com/decred/dcrd/dcrutil/v2"
 	"github.com/decred/dcrd/gcs"
 	"github.com/decred/dcrd/wire"
-	"github.com/decred/dcrwallet/errors"
+	"github.com/decred/dcrwallet/errors/v2"
 	"github.com/jrick/bitset"
 	"github.com/jrick/wsrpc/v2"
 	"golang.org/x/sync/errgroup"
@@ -65,7 +65,7 @@ func exists(ctx context.Context, r *RPC, method string, res *bitset.Bytes, param
 	var bitsetHex string
 	err := r.Call(ctx, method, &bitsetHex, param)
 	if err != nil {
-		errors.E(errors.Op(method), err)
+		return errors.E(errors.Op(method), err)
 	}
 	decoded, err := hex.DecodeString(bitsetHex)
 	if err != nil {
@@ -183,12 +183,10 @@ func (r *RPC) PublishTransaction(ctx context.Context, tx *wire.MsgTx) error {
 	}
 	err = r.Call(ctx, "sendrawtransaction", nil, b.String())
 	if err != nil {
-		switch e := err.(type) {
-		case *wsrpc.Error:
-			// Duplicate txs are not considered an error
-			if e.Code == codeDuplicateTx {
-				return nil
-			}
+		// Duplicate txs are not considered an error
+		var e *wsrpc.Error
+		if errors.As(err, &e) && e.Code == codeDuplicateTx {
+			return nil
 		}
 		return errors.E(op, err)
 	}

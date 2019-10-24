@@ -7,6 +7,7 @@ package udb
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"fmt"
 	"io/ioutil"
@@ -18,7 +19,7 @@ import (
 	"github.com/decred/dcrd/chaincfg/v2"
 	"github.com/decred/dcrd/dcrec"
 	"github.com/decred/dcrd/dcrutil/v2"
-	"github.com/decred/dcrwallet/errors"
+	"github.com/decred/dcrwallet/errors/v2"
 	"github.com/decred/dcrwallet/wallet/v3/walletdb"
 )
 
@@ -182,7 +183,7 @@ func testLocking(tc *testContext, rb walletdb.ReadBucket) {
 	if tc.watchingOnly {
 		wantErrCode = errors.WatchingOnly
 	}
-	if !errors.Is(wantErrCode, err) {
+	if !errors.Is(err, wantErrCode) {
 		tc.t.Fatalf("Lock: unexpected error: %v", err)
 	}
 
@@ -192,7 +193,7 @@ func testLocking(tc *testContext, rb walletdb.ReadBucket) {
 	// the correct error for that case.
 	err = tc.manager.Unlock(rb, privPassphrase)
 	if tc.watchingOnly {
-		if !errors.Is(errors.WatchingOnly, err) {
+		if !errors.Is(err, errors.WatchingOnly) {
 			tc.t.Fatalf("Unlock: unexpected error: %v", err)
 		}
 	} else if err != nil {
@@ -207,7 +208,7 @@ func testLocking(tc *testContext, rb walletdb.ReadBucket) {
 	// case.
 	err = tc.manager.Unlock(rb, privPassphrase)
 	if tc.watchingOnly {
-		if !errors.Is(errors.WatchingOnly, err) {
+		if !errors.Is(err, errors.WatchingOnly) {
 			tc.t.Fatalf("Unlock: unexpected error: %v", err)
 		}
 	} else if err != nil {
@@ -224,7 +225,7 @@ func testLocking(tc *testContext, rb walletdb.ReadBucket) {
 	if tc.watchingOnly {
 		wantErrCode = errors.WatchingOnly
 	}
-	if !errors.Is(wantErrCode, err) {
+	if !errors.Is(err, wantErrCode) {
 		tc.t.Fatalf("Unlock: unexpected error: %v", err)
 	}
 	if !tc.manager.IsLocked() {
@@ -453,6 +454,7 @@ func testImportScript(tc *testContext, wb walletdb.ReadWriteBucket) {
 }
 
 func TestManagerImports(t *testing.T) {
+	ctx := context.Background()
 	db, mgr, _, _, teardown, err := cloneDB("imports.kv")
 	defer teardown()
 	if err != nil {
@@ -470,7 +472,7 @@ func TestManagerImports(t *testing.T) {
 	}
 
 	testImports := func(tc *testContext) {
-		err := walletdb.Update(tc.db, func(tx walletdb.ReadWriteTx) error {
+		err := walletdb.Update(ctx, tc.db, func(tx walletdb.ReadWriteTx) error {
 			ns := tx.ReadWriteBucket(waddrmgrBucketKey)
 			testImportPrivateKey(tc, ns)
 			testImportScript(tc, ns)
@@ -501,7 +503,7 @@ func testChangePassphrase(tc *testContext, wb walletdb.ReadWriteBucket) {
 	TstRunWithReplacedNewSecretKey(func() {
 		err = tc.manager.ChangePassphrase(wb, pubPassphrase, pubPassphrase2, false)
 	})
-	if !errors.Is(errors.Crypto, err) {
+	if !errors.Is(err, errors.Crypto) {
 		tc.t.Fatalf("%s: unexpected error: %v", testName, err)
 	}
 
@@ -510,7 +512,7 @@ func testChangePassphrase(tc *testContext, wb walletdb.ReadWriteBucket) {
 	// Attempt to change public passphrase with invalid old passphrase.
 	testName = "ChangePassphrase (public) with invalid old passphrase"
 	err = tc.manager.ChangePassphrase(wb, []byte("bogus"), pubPassphrase2, false)
-	if !errors.Is(errors.Passphrase, err) {
+	if !errors.Is(err, errors.Passphrase) {
 		tc.t.Fatalf("%s: unexpected error: %v", testName, err)
 	}
 
@@ -541,7 +543,7 @@ func testChangePassphrase(tc *testContext, wb walletdb.ReadWriteBucket) {
 	if tc.watchingOnly {
 		wantErrCode = errors.WatchingOnly
 	}
-	if !errors.Is(wantErrCode, err) {
+	if !errors.Is(err, wantErrCode) {
 		tc.t.Fatalf("%s: unexpected error: %v", testName, err)
 	}
 
@@ -595,14 +597,14 @@ func testNewAccount(tc *testContext, wb walletdb.ReadWriteBucket) {
 	if tc.watchingOnly {
 		// Creating new accounts in watching-only mode should return ErrWatchingOnly
 		_, err := tc.manager.NewAccount(wb, "test")
-		if !errors.Is(errors.WatchingOnly, err) {
+		if !errors.Is(err, errors.WatchingOnly) {
 			tc.t.Fatalf("NewAccount: expected ErrWatchingOnly, got %v", err)
 		}
 	}
 
 	// Creating new accounts when wallet is locked should return ErrLocked
 	_, err := tc.manager.NewAccount(wb, "test")
-	if !errors.Is(errors.Locked, err) {
+	if !errors.Is(err, errors.Locked) {
 		tc.t.Fatalf("NewAccount: expected ErrLocked, got %v", err)
 	}
 
@@ -628,18 +630,18 @@ func testNewAccount(tc *testContext, wb walletdb.ReadWriteBucket) {
 
 	// Test duplicate account name error
 	_, err = tc.manager.NewAccount(wb, testName)
-	if !errors.Is(errors.Exist, err) {
+	if !errors.Is(err, errors.Exist) {
 		tc.t.Fatalf("NewAccount: expected ErrExist, got %v", err)
 	}
 	// Test account name validation
 	testName = "" // Empty account names are not allowed
 	_, err = tc.manager.NewAccount(wb, testName)
-	if !errors.Is(errors.Invalid, err) {
+	if !errors.Is(err, errors.Invalid) {
 		tc.t.Fatalf("NewAccount: expected ErrInvalid, got %v", err)
 	}
 	testName = "imported" // A reserved account name
 	_, err = tc.manager.NewAccount(wb, testName)
-	if !errors.Is(errors.Invalid, err) {
+	if !errors.Is(err, errors.Invalid) {
 		tc.t.Fatalf("NewAccount: expected ErrInvalid, got %v", err)
 	}
 }
@@ -665,7 +667,7 @@ func testLookupAccount(tc *testContext, rb walletdb.ReadBucket) {
 	// Test account not found error
 	testName := "non existent account"
 	_, err := tc.manager.LookupAccount(rb, testName)
-	if !errors.Is(errors.NotExist, err) {
+	if !errors.Is(err, errors.NotExist) {
 		tc.t.Fatalf("LookupAccount: unexpected error: %v", err)
 	}
 
@@ -705,7 +707,7 @@ func testRenameAccount(tc *testContext, wb walletdb.ReadWriteBucket) {
 	}
 	// Test duplicate account name error
 	err = tc.manager.RenameAccount(wb, tc.account, testName)
-	if !errors.Is(errors.Exist, err) {
+	if !errors.Is(err, errors.Exist) {
 		tc.t.Fatalf("RenameAccount: unexpected error: %v", err)
 	}
 	// Test old account name is no longer valid
@@ -713,7 +715,7 @@ func testRenameAccount(tc *testContext, wb walletdb.ReadWriteBucket) {
 	if err == nil {
 		tc.t.Fatalf("LookupAccount: unexpected error: %v", err)
 	}
-	if !errors.Is(errors.NotExist, err) {
+	if !errors.Is(err, errors.NotExist) {
 		tc.t.Fatalf("LookupAccount: unexpected error: %v", err)
 	}
 }
@@ -747,6 +749,7 @@ func testForEachAccount(tc *testContext, rb walletdb.ReadBucket) {
 // testEncryptDecryptErrors ensures that errors which occur while encrypting and
 // decrypting data return the expected errors.
 func testEncryptDecryptErrors(tc *testContext) {
+	ctx := context.Background()
 	invalidKeyType := CryptoKeyType(0xff)
 	if _, err := tc.manager.Encrypt(invalidKeyType, []byte{}); err == nil {
 		tc.t.Fatal("Encrypt accepted an invalid key type!")
@@ -764,19 +767,19 @@ func testEncryptDecryptErrors(tc *testContext) {
 	// Now the mgr is locked and encrypting/decrypting with private
 	// keys should fail.
 	_, err = tc.manager.Encrypt(CKTPrivate, []byte{})
-	if !errors.Is(errors.Locked, err) {
+	if !errors.Is(err, errors.Locked) {
 		tc.t.Fatal("encryption with private key should fail when manager" +
 			" is locked")
 	}
 
 	_, err = tc.manager.Decrypt(CKTPrivate, []byte{})
-	if !errors.Is(errors.Locked, err) {
+	if !errors.Is(err, errors.Locked) {
 		tc.t.Fatal("decryption with private key should fail when manager" +
 			" is locked")
 
 	}
 
-	walletdb.Update(tc.db, func(tx walletdb.ReadWriteTx) error {
+	walletdb.Update(ctx, tc.db, func(tx walletdb.ReadWriteTx) error {
 		ns := tx.ReadWriteBucket(waddrmgrBucketKey)
 		// Unlock the manager for these tests
 		if err = tc.manager.Unlock(ns, privPassphrase); err != nil {
@@ -789,7 +792,7 @@ func testEncryptDecryptErrors(tc *testContext) {
 	TstRunWithFailingCryptoKeyPriv(tc.manager, func() {
 		_, err = tc.manager.Encrypt(CKTPrivate, []byte{})
 	})
-	if !errors.Is(errors.Crypto, err) {
+	if !errors.Is(err, errors.Crypto) {
 		tc.t.Fatal("failed encryption")
 	}
 
@@ -802,9 +805,10 @@ func testEncryptDecryptErrors(tc *testContext) {
 // testEncryptDecrypt ensures that encrypting and decrypting data with the
 // the various crypto key types works as expected.
 func testEncryptDecrypt(tc *testContext) {
+	ctx := context.Background()
 	plainText := []byte("this is a plaintext")
 
-	walletdb.Update(tc.db, func(tx walletdb.ReadWriteTx) error {
+	walletdb.Update(ctx, tc.db, func(tx walletdb.ReadWriteTx) error {
 		ns := tx.ReadWriteBucket(waddrmgrBucketKey)
 		// Make sure address manager is unlocked
 		if err := tc.manager.Unlock(ns, privPassphrase); err != nil {
@@ -863,6 +867,7 @@ func TestManagerEncryptDecrypt(t *testing.T) {
 }
 
 func TestChangePassphrase(t *testing.T) {
+	ctx := context.Background()
 	db, mgr, _, _, teardown, err := cloneDB("change_passphrase.kv")
 	defer teardown()
 	if err != nil {
@@ -879,7 +884,7 @@ func TestChangePassphrase(t *testing.T) {
 		watchingOnly: false,
 	}
 
-	err = walletdb.Update(tc.db, func(tx walletdb.ReadWriteTx) error {
+	err = walletdb.Update(ctx, tc.db, func(tx walletdb.ReadWriteTx) error {
 		ns := tx.ReadWriteBucket(waddrmgrBucketKey)
 		testChangePassphrase(tc, ns)
 		return nil
@@ -891,7 +896,8 @@ func TestChangePassphrase(t *testing.T) {
 
 // testManagerAPI tests the functions provided by the Manager API.
 func testManagerAPI(tc *testContext) {
-	err := walletdb.Update(tc.db, func(tx walletdb.ReadWriteTx) error {
+	ctx := context.Background()
+	err := walletdb.Update(ctx, tc.db, func(tx walletdb.ReadWriteTx) error {
 		ns := tx.ReadWriteBucket(waddrmgrBucketKey)
 
 		testLocking(tc, ns)
@@ -917,6 +923,7 @@ func testManagerAPI(tc *testContext) {
 // manager such as running the full set of API tests against a newly converted
 // copy as well as when it is opened from an existing namespace.
 func TestManagerWatchingOnly(t *testing.T) {
+	ctx := context.Background()
 	db, mgr, _, _, teardown, err := cloneDB("mgr_watching_only.kv")
 	defer teardown()
 	if err != nil {
@@ -934,13 +941,13 @@ func TestManagerWatchingOnly(t *testing.T) {
 	})
 	mgr.Close()
 
-	mgr, _, _, err = Open(db, chaincfg.TestNet3Params(), pubPassphrase)
+	mgr, _, _, err = Open(ctx, db, chaincfg.TestNet3Params(), pubPassphrase)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	defer mgr.Close()
 
-	err = walletdb.Update(db, func(tx walletdb.ReadWriteTx) error {
+	err = walletdb.Update(ctx, db, func(tx walletdb.ReadWriteTx) error {
 		ns := tx.ReadWriteBucket(waddrmgrBucketKey)
 		if err = mgr.ConvertToWatchingOnly(ns); err != nil {
 			t.Fatalf("failed to convert manager to watching-only: %v", err)
@@ -962,7 +969,7 @@ func TestManagerWatchingOnly(t *testing.T) {
 	})
 
 	// Open the watching-only manager and run all the tests again.
-	mgr, _, _, err = Open(db, chaincfg.TestNet3Params(), pubPassphrase)
+	mgr, _, _, err = Open(ctx, db, chaincfg.TestNet3Params(), pubPassphrase)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -986,6 +993,7 @@ func TestManager(t *testing.T) {
 		t.Skip("short: skipping TestManager")
 	}
 
+	ctx := context.Background()
 	db, mgr, _, _, teardown, err := cloneDB("mgr_watching_only.kv")
 	defer teardown()
 	if err != nil {
@@ -1004,7 +1012,7 @@ func TestManager(t *testing.T) {
 
 	// Open the manager and run all the tests again in open mode which
 	// avoids reinserting new addresses like the create mode tests do.
-	mgr, _, _, err = Open(db, chaincfg.TestNet3Params(), pubPassphrase)
+	mgr, _, _, err = Open(ctx, db, chaincfg.TestNet3Params(), pubPassphrase)
 	if err != nil {
 		t.Fatalf("Open: unexpected error: %v", err)
 	}

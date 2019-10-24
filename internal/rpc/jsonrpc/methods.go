@@ -13,12 +13,14 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"math/big"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/decred/dcrd/blockchain"
 	"github.com/decred/dcrd/blockchain/stake/v2"
+	blockchain "github.com/decred/dcrd/blockchain/standalone"
 	"github.com/decred/dcrd/chaincfg/chainhash"
 	"github.com/decred/dcrd/chaincfg/v2"
 	"github.com/decred/dcrd/dcrec"
@@ -28,8 +30,7 @@ import (
 	dcrdtypes "github.com/decred/dcrd/rpc/jsonrpc/types"
 	"github.com/decred/dcrd/txscript/v2"
 	"github.com/decred/dcrd/wire"
-	"github.com/decred/dcrwallet/errors"
-	"github.com/decred/dcrwallet/internal/helpers"
+	"github.com/decred/dcrwallet/errors/v2"
 	"github.com/decred/dcrwallet/p2p/v2"
 	"github.com/decred/dcrwallet/rpc/client/dcrd"
 	"github.com/decred/dcrwallet/rpc/jsonrpc/types"
@@ -199,7 +200,11 @@ func lazyApplyHandler(s *Server, ctx context.Context, request *dcrjson.Request) 
 				return nil, rpcErrorf(dcrjson.ErrRPCClientNotConnected, "RPC passthrough requires dcrd RPC synchronization")
 			}
 			var resp json.RawMessage
-			err := rpc.Call(ctx, request.Method, &resp, request.Params)
+			var params = make([]interface{}, len(request.Params))
+			for i := range request.Params {
+				params[i] = request.Params[i]
+			}
+			err := rpc.Call(ctx, request.Method, &resp, params...)
 			if ctx.Err() != nil {
 				log.Warnf("Canceled RPC method %v invoked by %v: %v", request.Method, remoteAddr(ctx), err)
 				return nil, &dcrjson.RPCError{
@@ -274,7 +279,7 @@ func (s *Server) abandonTransaction(ctx context.Context, icmd interface{}) (inte
 		return nil, rpcError(dcrjson.ErrRPCDecodeHexString, err)
 	}
 
-	err = w.AbandonTransaction(hash)
+	err = w.AbandonTransaction(ctx, hash)
 	return nil, err
 }
 
@@ -287,15 +292,15 @@ func (s *Server) accountAddressIndex(ctx context.Context, icmd interface{}) (int
 		return nil, errUnloadedWallet
 	}
 
-	account, err := w.AccountNumber(cmd.Account)
+	account, err := w.AccountNumber(ctx, cmd.Account)
 	if err != nil {
-		if errors.Is(errors.NotExist, err) {
+		if errors.Is(err, errors.NotExist) {
 			return nil, errAccountNotFound
 		}
 		return nil, err
 	}
 
-	extChild, intChild, err := w.BIP0044BranchNextIndexes(account)
+	extChild, intChild, err := w.BIP0044BranchNextIndexes(ctx, account)
 	if err != nil {
 		return nil, err
 	}
@@ -321,9 +326,9 @@ func (s *Server) accountSyncAddressIndex(ctx context.Context, icmd interface{}) 
 		return nil, errUnloadedWallet
 	}
 
-	account, err := w.AccountNumber(cmd.Account)
+	account, err := w.AccountNumber(ctx, cmd.Account)
 	if err != nil {
-		if errors.Is(errors.NotExist, err) {
+		if errors.Is(err, errors.NotExist) {
 			return nil, errAccountNotFound
 		}
 		return nil, err
@@ -340,10 +345,10 @@ func (s *Server) accountSyncAddressIndex(ctx context.Context, icmd interface{}) 
 	// Additional addresses need to be watched.  Since addresses are derived
 	// based on the last used address, this RPC no longer changes the child
 	// indexes that new addresses are derived from.
-	return nil, w.ExtendWatchedAddresses(account, branch, index)
+	return nil, w.SyncLastReturnedAddress(ctx, account, branch, index)
 }
 
-func makeMultiSigScript(w *wallet.Wallet, keys []string, nRequired int) ([]byte, error) {
+func makeMultiSigScript(ctx context.Context, w *wallet.Wallet, keys []string, nRequired int) ([]byte, error) {
 	keysesPrecious := make([]*dcrutil.AddressSecpPubKey, len(keys))
 
 	// The address list will made up either of addreseses (pubkey hash), for
@@ -360,9 +365,9 @@ func makeMultiSigScript(w *wallet.Wallet, keys []string, nRequired int) ([]byte,
 		case *dcrutil.AddressSecpPubKey:
 			keysesPrecious[i] = addr
 		default:
-			pubKey, err := w.PubKeyForAddress(addr)
+			pubKey, err := w.PubKeyForAddress(ctx, addr)
 			if err != nil {
-				if errors.Is(errors.NotExist, err) {
+				if errors.Is(err, errors.NotExist) {
 					return nil, errAddressNotInWallet
 				}
 				return nil, err
@@ -406,12 +411,12 @@ func (s *Server) addMultiSigAddress(ctx context.Context, icmd interface{}) (inte
 		secp256k1Addrs[i] = addr
 	}
 
-	script, err := w.MakeSecp256k1MultiSigScript(secp256k1Addrs, cmd.NRequired)
+	script, err := w.MakeSecp256k1MultiSigScript(ctx, secp256k1Addrs, cmd.NRequired)
 	if err != nil {
 		return nil, err
 	}
 
-	p2shAddr, err := w.ImportP2SHRedeemScript(script)
+	p2shAddr, err := w.ImportP2SHRedeemScript(ctx, script)
 	if err != nil {
 		return nil, err
 	}
@@ -442,7 +447,7 @@ func (s *Server) addTicket(ctx context.Context, icmd interface{}) (interface{}, 
 		return nil, rpcError(dcrjson.ErrRPCDeserialization, err)
 	}
 
-	err = w.AddTicket(mtx)
+	err = w.AddTicket(ctx, mtx)
 	return nil, err
 }
 
@@ -458,9 +463,9 @@ func (s *Server) consolidate(ctx context.Context, icmd interface{}) (interface{}
 	account := uint32(udb.DefaultAccountNum)
 	var err error
 	if cmd.Account != nil {
-		account, err = w.AccountNumber(*cmd.Account)
+		account, err = w.AccountNumber(ctx, *cmd.Account)
 		if err != nil {
-			if errors.Is(errors.NotExist, err) {
+			if errors.Is(err, errors.NotExist) {
 				return nil, errAccountNotFound
 			}
 			return nil, err
@@ -481,7 +486,7 @@ func (s *Server) consolidate(ctx context.Context, icmd interface{}) (interface{}
 
 	// TODO In the future this should take the optional account and
 	// only consolidate UTXOs found within that account.
-	txHash, err := w.Consolidate(cmd.Inputs, account, changeAddr)
+	txHash, err := w.Consolidate(ctx, cmd.Inputs, account, changeAddr)
 	if err != nil {
 		return nil, err
 	}
@@ -498,7 +503,7 @@ func (s *Server) createMultiSig(ctx context.Context, icmd interface{}) (interfac
 		return nil, errUnloadedWallet
 	}
 
-	script, err := makeMultiSigScript(w, cmd.Keys, cmd.NRequired)
+	script, err := makeMultiSigScript(ctx, w, cmd.Keys, cmd.NRequired)
 	if err != nil {
 		return nil, err
 	}
@@ -529,9 +534,9 @@ func (s *Server) dumpPrivKey(ctx context.Context, icmd interface{}) (interface{}
 		return nil, err
 	}
 
-	key, err := w.DumpWIFPrivateKey(addr)
+	key, err := w.DumpWIFPrivateKey(ctx, addr)
 	if err != nil {
-		if errors.Is(errors.Locked, err) {
+		if errors.Is(err, errors.Locked) {
 			return nil, errWalletUnlockNeeded
 		}
 		return nil, err
@@ -568,7 +573,7 @@ func (s *Server) generateVote(ctx context.Context, icmd interface{}) (interface{
 		ExtendedBits: voteBitsExt,
 	}
 
-	ssgentx, err := w.GenerateVoteTx(blockHash, int32(cmd.Height), ticketHash,
+	ssgentx, err := w.GenerateVoteTx(ctx, blockHash, int32(cmd.Height), ticketHash,
 		voteBits)
 	if err != nil {
 		return nil, err
@@ -596,16 +601,16 @@ func (s *Server) getAddressesByAccount(ctx context.Context, icmd interface{}) (i
 		return nil, errUnloadedWallet
 	}
 
-	account, err := w.AccountNumber(cmd.Account)
+	account, err := w.AccountNumber(ctx, cmd.Account)
 	if err != nil {
-		if errors.Is(errors.NotExist, err) {
+		if errors.Is(err, errors.NotExist) {
 			return nil, errAccountNotFound
 		}
 		return nil, err
 	}
 
 	// Find the next child address indexes for the account.
-	endExt, endInt, err := w.BIP0044BranchNextIndexes(account)
+	endExt, endInt, err := w.BIP0044BranchNextIndexes(ctx, account)
 	if err != nil {
 		return nil, err
 	}
@@ -655,16 +660,23 @@ func (s *Server) getBalance(ctx context.Context, icmd interface{}) (interface{},
 		accountName = *cmd.Account
 	}
 
-	blockHash, _ := w.MainChainTip()
+	blockHash, _ := w.MainChainTip(ctx)
 	result := types.GetBalanceResult{
 		BlockHash: blockHash.String(),
 	}
 
 	if accountName == "*" {
-		balances, err := w.CalculateAccountBalances(int32(*cmd.MinConf))
+		balanceMap, err := w.CalculateAccountBalances(ctx, int32(*cmd.MinConf))
 		if err != nil {
 			return nil, err
 		}
+		balances := make([]*udb.Balances, 0, len(balanceMap))
+		for _, bal := range balanceMap {
+			balances = append(balances, bal)
+		}
+		sort.Slice(balances, func(i, j int) bool {
+			return balances[i].Account < balances[j].Account
+		})
 
 		var (
 			totImmatureCoinbase dcrutil.Amount
@@ -677,13 +689,13 @@ func (s *Server) getBalance(ctx context.Context, icmd interface{}) (interface{},
 		)
 
 		balancesLen := uint32(len(balances))
-		result.Balances = make([]types.GetAccountBalanceResult, balancesLen)
+		result.Balances = make([]types.GetAccountBalanceResult, 0, balancesLen)
 
 		for _, bal := range balances {
-			accountName, err := w.AccountName(bal.Account)
+			accountName, err := w.AccountName(ctx, bal.Account)
 			if err != nil {
 				// Expect account lookup to succeed
-				if errors.Is(errors.NotExist, err) {
+				if errors.Is(err, errors.NotExist) {
 					return nil, rpcError(dcrjson.ErrRPCInternal.Code, err)
 				}
 				return nil, err
@@ -708,13 +720,7 @@ func (s *Server) getBalance(ctx context.Context, icmd interface{}) (interface{},
 				VotingAuthority:         bal.VotingAuthority.ToCoin(),
 			}
 
-			var balIdx uint32
-			if bal.Account == udb.ImportedAddrAccount {
-				balIdx = balancesLen - 1
-			} else {
-				balIdx = bal.Account
-			}
-			result.Balances[balIdx] = json
+			result.Balances = append(result.Balances, json)
 		}
 
 		result.TotalImmatureCoinbaseRewards = totImmatureCoinbase.ToCoin()
@@ -725,18 +731,18 @@ func (s *Server) getBalance(ctx context.Context, icmd interface{}) (interface{},
 		result.TotalVotingAuthority = totVotingAuthority.ToCoin()
 		result.CumulativeTotal = cumTot.ToCoin()
 	} else {
-		account, err := w.AccountNumber(accountName)
+		account, err := w.AccountNumber(ctx, accountName)
 		if err != nil {
-			if errors.Is(errors.NotExist, err) {
+			if errors.Is(err, errors.NotExist) {
 				return nil, errAccountNotFound
 			}
 			return nil, err
 		}
 
-		bal, err := w.CalculateAccountBalance(account, int32(*cmd.MinConf))
+		bal, err := w.CalculateAccountBalance(ctx, account, int32(*cmd.MinConf))
 		if err != nil {
 			// Expect account lookup to succeed
-			if errors.Is(errors.NotExist, err) {
+			if errors.Is(err, errors.NotExist) {
 				return nil, rpcError(dcrjson.ErrRPCInternal.Code, err)
 			}
 			return nil, err
@@ -765,7 +771,7 @@ func (s *Server) getBestBlock(ctx context.Context, icmd interface{}) (interface{
 		return nil, errUnloadedWallet
 	}
 
-	hash, height := w.MainChainTip()
+	hash, height := w.MainChainTip(ctx)
 	result := &dcrdtypes.GetBestBlockResult{
 		Hash:   hash.String(),
 		Height: int64(height),
@@ -781,7 +787,7 @@ func (s *Server) getBestBlockHash(ctx context.Context, icmd interface{}) (interf
 		return nil, errUnloadedWallet
 	}
 
-	hash, _ := w.MainChainTip()
+	hash, _ := w.MainChainTip(ctx)
 	return hash.String(), nil
 }
 
@@ -793,7 +799,7 @@ func (s *Server) getBlockCount(ctx context.Context, icmd interface{}) (interface
 		return nil, errUnloadedWallet
 	}
 
-	_, height := w.MainChainTip()
+	_, height := w.MainChainTip(ctx)
 	return height, nil
 }
 
@@ -808,7 +814,7 @@ func (s *Server) getBlockHash(ctx context.Context, icmd interface{}) (interface{
 
 	height := int32(cmd.Index)
 	id := wallet.NewBlockIdentifierFromHeight(height)
-	info, err := w.BlockInfo(id)
+	info, err := w.BlockInfo(ctx, id)
 	if err != nil {
 		return nil, err
 	}
@@ -832,13 +838,13 @@ func (s *Server) getInfo(ctx context.Context, icmd interface{}) (interface{}, er
 		return nil, errUnloadedWallet
 	}
 
-	tipHash, tipHeight := w.MainChainTip()
-	tipHeader, err := w.BlockHeader(&tipHash)
+	tipHash, tipHeight := w.MainChainTip(ctx)
+	tipHeader, err := w.BlockHeader(ctx, &tipHash)
 	if err != nil {
 		return nil, err
 	}
 
-	balances, err := w.CalculateAccountBalances(1)
+	balances, err := w.CalculateAccountBalances(ctx, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -924,15 +930,15 @@ func (s *Server) getAccount(ctx context.Context, icmd interface{}) (interface{},
 	}
 
 	// Fetch the associated account
-	account, err := w.AccountOfAddress(addr)
+	account, err := w.AccountOfAddress(ctx, addr)
 	if err != nil {
-		if errors.Is(errors.NotExist, err) {
+		if errors.Is(err, errors.NotExist) {
 			return nil, errAddressNotInWallet
 		}
 		return nil, err
 	}
 
-	acctName, err := w.AccountName(account)
+	acctName, err := w.AccountName(ctx, account)
 	if err != nil {
 		return nil, err
 	}
@@ -952,9 +958,9 @@ func (s *Server) getAccountAddress(ctx context.Context, icmd interface{}) (inter
 		return nil, errUnloadedWallet
 	}
 
-	account, err := w.AccountNumber(cmd.Account)
+	account, err := w.AccountNumber(ctx, cmd.Account)
 	if err != nil {
-		if errors.Is(errors.NotExist, err) {
+		if errors.Is(err, errors.NotExist) {
 			return nil, errAccountNotFound
 		}
 		return nil, err
@@ -962,7 +968,7 @@ func (s *Server) getAccountAddress(ctx context.Context, icmd interface{}) (inter
 	addr, err := w.CurrentAddress(account)
 	if err != nil {
 		// Expect account lookup to succeed
-		if errors.Is(errors.NotExist, err) {
+		if errors.Is(err, errors.NotExist) {
 			return nil, rpcError(dcrjson.ErrRPCInternal.Code, err)
 		}
 		return nil, err
@@ -984,17 +990,17 @@ func (s *Server) getUnconfirmedBalance(ctx context.Context, icmd interface{}) (i
 	if cmd.Account != nil {
 		acctName = *cmd.Account
 	}
-	account, err := w.AccountNumber(acctName)
+	account, err := w.AccountNumber(ctx, acctName)
 	if err != nil {
-		if errors.Is(errors.NotExist, err) {
+		if errors.Is(err, errors.NotExist) {
 			return nil, errAccountNotFound
 		}
 		return nil, err
 	}
-	bals, err := w.CalculateAccountBalance(account, 1)
+	bals, err := w.CalculateAccountBalance(ctx, account, 1)
 	if err != nil {
 		// Expect account lookup to succeed
-		if errors.Is(errors.NotExist, err) {
+		if errors.Is(err, errors.NotExist) {
 			return nil, rpcError(dcrjson.ErrRPCInternal.Code, err)
 		}
 		return nil, err
@@ -1038,13 +1044,13 @@ func (s *Server) importPrivKey(ctx context.Context, icmd interface{}) (interface
 	}
 
 	// Import the private key, handling any errors.
-	_, err = w.ImportPrivateKey(wif)
+	_, err = w.ImportPrivateKey(ctx, wif)
 	if err != nil {
 		switch {
-		case errors.Is(errors.Exist, err):
+		case errors.Is(err, errors.Exist):
 			// Do not return duplicate key errors to the client.
 			return nil, nil
-		case errors.Is(errors.Locked, err):
+		case errors.Is(err, errors.Locked):
 			return nil, errWalletUnlockNeeded
 		default:
 			return nil, err
@@ -1089,13 +1095,13 @@ func (s *Server) importScript(ctx context.Context, icmd interface{}) (interface{
 		return nil, rpcErrorf(dcrjson.ErrRPCInvalidParameter, "empty script")
 	}
 
-	err = w.ImportScript(rs)
+	err = w.ImportScript(ctx, rs)
 	if err != nil {
 		switch {
-		case errors.Is(errors.Exist, err):
+		case errors.Is(err, errors.Exist):
 			// Do not return duplicate script errors to the client.
 			return nil, nil
-		case errors.Is(errors.Locked, err):
+		case errors.Is(err, errors.Locked):
 			return nil, errWalletUnlockNeeded
 		default:
 			return nil, err
@@ -1109,6 +1115,21 @@ func (s *Server) importScript(ctx context.Context, icmd interface{}) (interface{
 	}
 
 	return nil, nil
+}
+
+func (s *Server) importXpub(ctx context.Context, icmd interface{}) (interface{}, error) {
+	cmd := icmd.(*types.ImportXpubCmd)
+	w, ok := s.walletLoader.LoadedWallet()
+	if !ok {
+		return nil, errUnloadedWallet
+	}
+
+	xpub, err := hdkeychain.NewKeyFromString(cmd.Xpub, w.ChainParams())
+	if err != nil {
+		return nil, err
+	}
+
+	return nil, w.ImportXpubAccount(ctx, cmd.Name, xpub)
 }
 
 // createNewAccount handles a createnewaccount request by creating and
@@ -1127,9 +1148,9 @@ func (s *Server) createNewAccount(ctx context.Context, icmd interface{}) (interf
 		return nil, errReservedAccountName
 	}
 
-	_, err := w.NextAccount(cmd.Account)
+	_, err := w.NextAccount(ctx, cmd.Account)
 	if err != nil {
-		if errors.Is(errors.Locked, err) {
+		if errors.Is(err, errors.Locked) {
 			return nil, rpcErrorf(dcrjson.ErrRPCWalletUnlockNeeded, "creating new accounts requires an unlocked wallet")
 		}
 		return nil, err
@@ -1153,14 +1174,14 @@ func (s *Server) renameAccount(ctx context.Context, icmd interface{}) (interface
 	}
 
 	// Check that given account exists
-	account, err := w.AccountNumber(cmd.OldAccount)
+	account, err := w.AccountNumber(ctx, cmd.OldAccount)
 	if err != nil {
-		if errors.Is(errors.NotExist, err) {
+		if errors.Is(err, errors.NotExist) {
 			return nil, errAccountNotFound
 		}
 		return nil, err
 	}
-	err = w.RenameAccount(account, cmd.NewAccount)
+	err = w.RenameAccount(ctx, account, cmd.NewAccount)
 	return nil, err
 }
 
@@ -1185,7 +1206,7 @@ func (s *Server) getMultisigOutInfo(ctx context.Context, icmd interface{}) (inte
 		Tree:  wire.TxTreeRegular,
 	}
 
-	p2shOutput, err := w.FetchP2SHMultiSigOutput(op)
+	p2shOutput, err := w.FetchP2SHMultiSigOutput(ctx, op)
 	if err != nil {
 		return nil, err
 	}
@@ -1252,15 +1273,15 @@ func (s *Server) getNewAddress(ctx context.Context, icmd interface{}) (interface
 	if cmd.Account != nil {
 		acctName = *cmd.Account
 	}
-	account, err := w.AccountNumber(acctName)
+	account, err := w.AccountNumber(ctx, acctName)
 	if err != nil {
-		if errors.Is(errors.NotExist, err) {
+		if errors.Is(err, errors.NotExist) {
 			return nil, errAccountNotFound
 		}
 		return nil, err
 	}
 
-	addr, err := w.NewExternalAddress(account, callOpts...)
+	addr, err := w.NewExternalAddress(ctx, account, callOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1283,15 +1304,15 @@ func (s *Server) getRawChangeAddress(ctx context.Context, icmd interface{}) (int
 	if cmd.Account != nil {
 		acctName = *cmd.Account
 	}
-	account, err := w.AccountNumber(acctName)
+	account, err := w.AccountNumber(ctx, acctName)
 	if err != nil {
-		if errors.Is(errors.NotExist, err) {
+		if errors.Is(err, errors.NotExist) {
 			return nil, errAccountNotFound
 		}
 		return nil, err
 	}
 
-	addr, err := w.NewChangeAddress(account)
+	addr, err := w.NewChangeAddress(ctx, account)
 	if err != nil {
 		return nil, err
 	}
@@ -1309,18 +1330,23 @@ func (s *Server) getReceivedByAccount(ctx context.Context, icmd interface{}) (in
 		return nil, errUnloadedWallet
 	}
 
-	account, err := w.AccountNumber(cmd.Account)
+	account, err := w.AccountNumber(ctx, cmd.Account)
 	if err != nil {
-		if errors.Is(errors.NotExist, err) {
+		if errors.Is(err, errors.NotExist) {
 			return nil, errAccountNotFound
 		}
 		return nil, err
 	}
 
+	// Transactions are not tracked for imported xpub accounts.
+	if account > udb.ImportedAddrAccount {
+		return 0.0, nil
+	}
+
 	// TODO: This is more inefficient that it could be, but the entire
 	// algorithm is already dominated by reading every transaction in the
 	// wallet's history.
-	results, err := w.TotalReceivedForAccounts(int32(*cmd.MinConf))
+	results, err := w.TotalReceivedForAccounts(ctx, int32(*cmd.MinConf))
 	if err != nil {
 		return nil, err
 	}
@@ -1344,9 +1370,9 @@ func (s *Server) getReceivedByAddress(ctx context.Context, icmd interface{}) (in
 	if err != nil {
 		return nil, err
 	}
-	total, err := w.TotalReceivedForAddr(addr, int32(*cmd.MinConf))
+	total, err := w.TotalReceivedForAddr(ctx, addr, int32(*cmd.MinConf))
 	if err != nil {
-		if errors.Is(errors.NotExist, err) {
+		if errors.Is(err, errors.NotExist) {
 			return nil, errAddressNotInWallet
 		}
 		return nil, err
@@ -1369,16 +1395,16 @@ func (s *Server) getMasterPubkey(ctx context.Context, icmd interface{}) (interfa
 	account := uint32(udb.DefaultAccountNum)
 	if cmd.Account != nil {
 		var err error
-		account, err = w.AccountNumber(*cmd.Account)
+		account, err = w.AccountNumber(ctx, *cmd.Account)
 		if err != nil {
-			if errors.Is(errors.NotExist, err) {
+			if errors.Is(err, errors.NotExist) {
 				return nil, errAccountNotFound
 			}
 			return nil, err
 		}
 	}
 
-	masterPubKey, err := w.MasterPubKey(account)
+	masterPubKey, err := w.MasterPubKey(ctx, account)
 	if err != nil {
 		return nil, err
 	}
@@ -1403,7 +1429,7 @@ func (s *Server) getStakeInfo(ctx context.Context, icmd interface{}) (interface{
 	if rpc != nil {
 		sinfo, err = w.StakeInfoPrecise(ctx, rpc)
 	} else {
-		sinfo, err = w.StakeInfo()
+		sinfo, err = w.StakeInfo(ctx)
 	}
 	if err != nil {
 		return nil, err
@@ -1495,14 +1521,14 @@ func (s *Server) getTransaction(ctx context.Context, icmd interface{}) (interfac
 	}
 
 	// returns nil details when not found
-	txd, err := wallet.UnstableAPI(w).TxDetails(txHash)
-	if errors.Is(errors.NotExist, err) {
+	txd, err := wallet.UnstableAPI(w).TxDetails(ctx, txHash)
+	if errors.Is(err, errors.NotExist) {
 		return nil, rpcErrorf(dcrjson.ErrRPCNoTxInfo, "no information for transaction")
 	} else if err != nil {
 		return nil, err
 	}
 
-	_, tipHeight := w.MainChainTip()
+	_, tipHeight := w.MainChainTip(ctx)
 
 	var b strings.Builder
 	b.Grow(2 * txd.MsgTx.SerializeSize())
@@ -1553,7 +1579,7 @@ func (s *Server) getTransaction(ctx context.Context, icmd interface{}) (interfac
 	ret.Amount = (creditTotal - debitTotal).ToCoin()
 	ret.Fee = negFeeF64
 
-	details, err := w.ListTransactionDetails(txHash)
+	details, err := w.ListTransactionDetails(ctx, txHash)
 	if err != nil {
 		return nil, err
 	}
@@ -1587,7 +1613,7 @@ func (s *Server) getVoteChoices(ctx context.Context, icmd interface{}) (interfac
 		Choices: make([]types.VoteChoice, len(agendas)),
 	}
 
-	choices, _, err := w.AgendaChoices()
+	choices, _, err := w.AgendaChoices(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1635,7 +1661,7 @@ func (s *Server) getWalletFee(ctx context.Context, icmd interface{}) (interface{
 // separated by newlines.  It is set during init.  These usages are used for all
 // locales.
 //
-//go:generate go run ../../internal/rpchelp/genrpcserverhelp.go jsonrpc
+//go:generate go run ../../rpchelp/genrpcserverhelp.go jsonrpc
 //go:generate gofmt -w rpcserverhelp.go
 
 var helpDescs map[string]string
@@ -1712,15 +1738,15 @@ func (s *Server) listAccounts(ctx context.Context, icmd interface{}) (interface{
 	}
 
 	accountBalances := map[string]float64{}
-	results, err := w.CalculateAccountBalances(int32(*cmd.MinConf))
+	results, err := w.CalculateAccountBalances(ctx, int32(*cmd.MinConf))
 	if err != nil {
 		return nil, err
 	}
 	for _, result := range results {
-		accountName, err := w.AccountName(result.Account)
+		accountName, err := w.AccountName(ctx, result.Account)
 		if err != nil {
 			// Expect name lookup to succeed
-			if errors.Is(errors.NotExist, err) {
+			if errors.Is(err, errors.NotExist) {
 				return nil, rpcError(dcrjson.ErrRPCInternal.Code, err)
 			}
 			return nil, err
@@ -1759,7 +1785,7 @@ func (s *Server) listReceivedByAccount(ctx context.Context, icmd interface{}) (i
 		return nil, errUnloadedWallet
 	}
 
-	results, err := w.TotalReceivedForAccounts(int32(*cmd.MinConf))
+	results, err := w.TotalReceivedForAccounts(ctx, int32(*cmd.MinConf))
 	if err != nil {
 		return nil, err
 	}
@@ -1803,13 +1829,13 @@ func (s *Server) listReceivedByAddress(ctx context.Context, icmd interface{}) (i
 		tx []string
 	}
 
-	_, tipHeight := w.MainChainTip()
+	_, tipHeight := w.MainChainTip(ctx)
 
 	// Intermediate data for all addresses.
 	allAddrData := make(map[string]AddrData)
 	// Create an AddrData entry for each active address in the account.
 	// Otherwise we'll just get addresses from transactions later.
-	sortedAddrs, err := w.SortedActivePaymentAddresses()
+	sortedAddrs, err := w.SortedActivePaymentAddresses(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1825,7 +1851,7 @@ func (s *Server) listReceivedByAddress(ctx context.Context, icmd interface{}) (i
 	} else {
 		endHeight = tipHeight - int32(minConf) + 1
 	}
-	err = wallet.UnstableAPI(w).RangeTransactions(0, endHeight, func(details []udb.TxDetails) (bool, error) {
+	err = wallet.UnstableAPI(w).RangeTransactions(ctx, 0, endHeight, func(details []udb.TxDetails) (bool, error) {
 		confirmations := confirms(details[0].Block.Height, tipHeight)
 		for _, tx := range details {
 			for _, cred := range tx.Credits {
@@ -1891,11 +1917,11 @@ func (s *Server) listSinceBlock(ctx context.Context, icmd interface{}) (interfac
 		return nil, rpcErrorf(dcrjson.ErrRPCInvalidParameter, "target_confirmations must be positive")
 	}
 
-	tipHash, tipHeight := w.MainChainTip()
+	tipHash, tipHeight := w.MainChainTip(ctx)
 	lastBlock := &tipHash
 	if targetConf > 0 {
 		id := wallet.NewBlockIdentifierFromHeight((tipHeight + 1) - targetConf)
-		info, err := w.BlockInfo(id)
+		info, err := w.BlockInfo(ctx, id)
 		if err != nil {
 			return nil, err
 		}
@@ -1911,14 +1937,14 @@ func (s *Server) listSinceBlock(ctx context.Context, icmd interface{}) (interfac
 		if err != nil {
 			return nil, rpcError(dcrjson.ErrRPCDecodeHexString, err)
 		}
-		header, err := w.BlockHeader(hash)
+		header, err := w.BlockHeader(ctx, hash)
 		if err != nil {
 			return nil, err
 		}
 		end = int32(header.Height)
 	}
 
-	txInfoList, err := w.ListSinceBlock(-1, end, tipHeight)
+	txInfoList, err := w.ListSinceBlock(ctx, -1, end, tipHeight)
 	if err != nil {
 		return nil, err
 	}
@@ -1938,7 +1964,7 @@ func (s *Server) listScripts(ctx context.Context, icmd interface{}) (interface{}
 		return nil, errUnloadedWallet
 	}
 
-	redeemScripts, err := w.FetchAllRedeemScripts()
+	redeemScripts, err := w.FetchAllRedeemScripts(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1980,7 +2006,7 @@ func (s *Server) listTransactions(ctx context.Context, icmd interface{}) (interf
 				`Use "*" to reference all accounts.`)
 	}
 
-	return w.ListTransactions(*cmd.From, *cmd.Count)
+	return w.ListTransactions(ctx, *cmd.From, *cmd.Count)
 }
 
 // listAddressTransactions handles a listaddresstransactions request by
@@ -2010,7 +2036,7 @@ func (s *Server) listAddressTransactions(ctx context.Context, icmd interface{}) 
 		hash160Map[string(addr.ScriptAddress())] = struct{}{}
 	}
 
-	return w.ListAddressTransactions(hash160Map)
+	return w.ListAddressTransactions(ctx, hash160Map)
 }
 
 // listAllTransactions handles a listalltransactions request by returning
@@ -2029,7 +2055,7 @@ func (s *Server) listAllTransactions(ctx context.Context, icmd interface{}) (int
 			"listing all transactions may only be done for all accounts")
 	}
 
-	return w.ListAllTransactions()
+	return w.ListAllTransactions(ctx)
 }
 
 // listUnspent handles the listunspent command.
@@ -2053,9 +2079,9 @@ func (s *Server) listUnspent(ctx context.Context, icmd interface{}) (interface{}
 		}
 	}
 
-	result, err := w.ListUnspent(int32(*cmd.MinConf), int32(*cmd.MaxConf), addresses)
+	result, err := w.ListUnspent(ctx, int32(*cmd.MinConf), int32(*cmd.MaxConf), addresses)
 	if err != nil {
-		if errors.Is(errors.NotExist, err) {
+		if errors.Is(err, errors.NotExist) {
 			return nil, errAddressNotInWallet
 		}
 		return nil, err
@@ -2110,9 +2136,9 @@ func (s *Server) purchaseTicket(ctx context.Context, icmd interface{}) (interfac
 		return nil, rpcErrorf(dcrjson.ErrRPCInvalidParameter, "negative spend limit")
 	}
 
-	account, err := w.AccountNumber(cmd.FromAccount)
+	account, err := w.AccountNumber(ctx, cmd.FromAccount)
 	if err != nil {
-		if errors.Is(errors.NotExist, err) {
+		if errors.Is(err, errors.NotExist) {
 			return nil, errAccountNotFound
 		}
 		return nil, err
@@ -2186,7 +2212,7 @@ func (s *Server) purchaseTicket(ctx context.Context, icmd interface{}) (interfac
 		}
 	}
 
-	hashes, err := w.PurchaseTickets(0, spendLimit, minConf, ticketAddr,
+	hashes, err := w.PurchaseTickets(ctx, 0, spendLimit, minConf, ticketAddr,
 		account, numTickets, poolAddr, poolFee, expiry, w.RelayFee(),
 		ticketFee)
 	if err != nil {
@@ -2243,17 +2269,31 @@ func makeOutputs(pairs map[string]dcrutil.Amount, chainParams *chaincfg.Params) 
 // sendPairs creates and sends payment transactions.
 // It returns the transaction hash in string format upon success
 // All errors are returned in dcrjson.RPCError format
-func sendPairs(w *wallet.Wallet, amounts map[string]dcrutil.Amount, account uint32, minconf int32) (string, error) {
+func (s *Server) sendPairs(ctx context.Context, w *wallet.Wallet, amounts map[string]dcrutil.Amount, account uint32, minconf int32) (string, error) {
+	changeAccount := account
+	if s.cfg.CSPPServer != "" {
+		mixAccount, err := w.AccountNumber(ctx, s.cfg.MixAccount)
+		if err != nil {
+			return "", err
+		}
+		if account == mixAccount {
+			changeAccount, err = w.AccountNumber(ctx, s.cfg.MixChangeAccount)
+			if err != nil {
+				return "", err
+			}
+		}
+	}
+
 	outputs, err := makeOutputs(amounts, w.ChainParams())
 	if err != nil {
 		return "", err
 	}
-	txSha, err := w.SendOutputs(outputs, account, minconf)
+	txSha, err := w.SendOutputs(ctx, outputs, account, changeAccount, minconf)
 	if err != nil {
-		if errors.Is(errors.Locked, err) {
+		if errors.Is(err, errors.Locked) {
 			return "", errWalletUnlockNeeded
 		}
-		if errors.Is(errors.InsufficientBalance, err) {
+		if errors.Is(err, errors.InsufficientBalance) {
 			return "", rpcError(dcrjson.ErrRPCWalletInsufficientFunds, err)
 		}
 		return "", err
@@ -2286,7 +2326,7 @@ func (s *Server) redeemMultiSigOut(ctx context.Context, icmd interface{}) (inter
 		}
 	} else {
 		account := uint32(udb.DefaultAccountNum)
-		addr, err = w.NewInternalAddress(account, wallet.WithGapPolicyWrap())
+		addr, err = w.NewInternalAddress(ctx, account, wallet.WithGapPolicyWrap())
 		if err != nil {
 			return nil, err
 		}
@@ -2304,7 +2344,7 @@ func (s *Server) redeemMultiSigOut(ctx context.Context, icmd interface{}) (inter
 		Index: cmd.Index,
 		Tree:  cmd.Tree,
 	}
-	p2shOutput, err := w.FetchP2SHMultiSigOutput(&op)
+	p2shOutput, err := w.FetchP2SHMultiSigOutput(ctx, &op)
 	if err != nil {
 		return nil, err
 	}
@@ -2389,7 +2429,7 @@ func (s *Server) redeemMultiSigOuts(ctx context.Context, icmd interface{}) (inte
 	if !ok {
 		return nil, rpcErrorf(dcrjson.ErrRPCInvalidParameter, "address is not P2SH")
 	}
-	msos, err := wallet.UnstableAPI(w).UnspentMultisigCreditsForAddress(p2shAddr)
+	msos, err := wallet.UnstableAPI(w).UnspentMultisigCreditsForAddress(ctx, p2shAddr)
 	if err != nil {
 		return nil, err
 	}
@@ -2480,7 +2520,7 @@ func (s *Server) stakePoolUserInfo(ctx context.Context, icmd interface{}) (inter
 	if err != nil {
 		return nil, err
 	}
-	spui, err := w.StakePoolUserInfo(userAddr)
+	spui, err := w.StakePoolUserInfo(ctx, userAddr)
 	if err != nil {
 		return nil, err
 	}
@@ -2488,7 +2528,7 @@ func (s *Server) stakePoolUserInfo(ctx context.Context, icmd interface{}) (inter
 	resp := new(types.StakePoolUserInfoResult)
 	resp.Tickets = make([]types.PoolUserTicket, 0, len(spui.Tickets))
 	resp.InvalidTickets = make([]string, 0, len(spui.InvalidTickets))
-	_, height := w.MainChainTip()
+	_, height := w.MainChainTip(ctx)
 	for _, ticket := range spui.Tickets {
 		var ticketRes types.PoolUserTicket
 
@@ -2543,7 +2583,7 @@ func (s *Server) ticketsForAddress(ctx context.Context, icmd interface{}) (inter
 		return nil, err
 	}
 
-	ticketHashes, err := w.TicketHashesForVotingAddress(addr)
+	ticketHashes, err := w.TicketHashesForVotingAddress(ctx, addr)
 	if err != nil {
 		return nil, err
 	}
@@ -2578,7 +2618,7 @@ func (s *Server) sendFrom(ctx context.Context, icmd interface{}) (interface{}, e
 		return nil, rpcErrorf(dcrjson.ErrRPCUnimplemented, "transaction comments are unsupported")
 	}
 
-	account, err := w.AccountNumber(cmd.FromAccount)
+	account, err := w.AccountNumber(ctx, cmd.FromAccount)
 	if err != nil {
 		return nil, err
 	}
@@ -2600,7 +2640,7 @@ func (s *Server) sendFrom(ctx context.Context, icmd interface{}) (interface{}, e
 		cmd.ToAddress: amt,
 	}
 
-	return sendPairs(w, pairs, account, minConf)
+	return s.sendPairs(ctx, w, pairs, account, minConf)
 }
 
 // sendMany handles a sendmany RPC request by creating a new transaction
@@ -2621,7 +2661,7 @@ func (s *Server) sendMany(ctx context.Context, icmd interface{}) (interface{}, e
 		return nil, rpcErrorf(dcrjson.ErrRPCUnimplemented, "transaction comments are unsupported")
 	}
 
-	account, err := w.AccountNumber(cmd.FromAccount)
+	account, err := w.AccountNumber(ctx, cmd.FromAccount)
 	if err != nil {
 		return nil, err
 	}
@@ -2642,7 +2682,7 @@ func (s *Server) sendMany(ctx context.Context, icmd interface{}) (interface{}, e
 		pairs[k] = amt
 	}
 
-	return sendPairs(w, pairs, account, minConf)
+	return s.sendPairs(ctx, w, pairs, account, minConf)
 }
 
 // sendToAddress handles a sendtoaddress RPC request by creating a new
@@ -2679,7 +2719,7 @@ func (s *Server) sendToAddress(ctx context.Context, icmd interface{}) (interface
 	}
 
 	// sendtoaddress always spends from the default account, this matches bitcoind
-	return sendPairs(w, pairs, udb.DefaultAccountNum, 1)
+	return s.sendPairs(ctx, w, pairs, udb.DefaultAccountNum, 1)
 }
 
 // sendToMultiSig handles a sendtomultisig RPC request by creating a new
@@ -2723,9 +2763,9 @@ func (s *Server) sendToMultiSig(ctx context.Context, icmd interface{}) (interfac
 		case *dcrutil.AddressSecpPubKey:
 			pubkeys[i] = addr
 		default:
-			pubKey, err := w.PubKeyForAddress(addr)
+			pubKey, err := w.PubKeyForAddress(ctx, addr)
 			if err != nil {
-				if errors.Is(errors.NotExist, err) {
+				if errors.Is(err, errors.NotExist) {
 					return nil, errAddressNotInWallet
 				}
 				return nil, err
@@ -2744,7 +2784,7 @@ func (s *Server) sendToMultiSig(ctx context.Context, icmd interface{}) (interfac
 	}
 
 	tx, addr, script, err :=
-		w.CreateMultisigTx(account, amount, pubkeys, nrequired, minconf)
+		w.CreateMultisigTx(ctx, account, amount, pubkeys, nrequired, minconf)
 	if err != nil {
 		return nil, err
 	}
@@ -2816,7 +2856,7 @@ func (s *Server) setVoteChoice(ctx context.Context, icmd interface{}) (interface
 		return nil, errUnloadedWallet
 	}
 
-	_, err := w.SetAgendaChoices(wallet.AgendaChoice{
+	_, err := w.SetAgendaChoices(ctx, wallet.AgendaChoice{
 		AgendaID: cmd.AgendaID,
 		ChoiceID: cmd.ChoiceID,
 	})
@@ -2836,12 +2876,12 @@ func (s *Server) signMessage(ctx context.Context, icmd interface{}) (interface{}
 	if err != nil {
 		return nil, err
 	}
-	sig, err := w.SignMessage(cmd.Message, addr)
+	sig, err := w.SignMessage(ctx, cmd.Message, addr)
 	if err != nil {
-		if errors.Is(errors.NotExist, err) {
+		if errors.Is(err, errors.NotExist) {
 			return nil, errAddressNotInWallet
 		}
-		if errors.Is(errors.Locked, err) {
+		if errors.Is(err, errors.Locked) {
 			return nil, errWalletUnlockNeeded
 		}
 		return nil, err
@@ -3041,7 +3081,7 @@ func (s *Server) signRawTransaction(ctx context.Context, icmd interface{}) (inte
 	// `complete' denotes that we successfully signed all outputs and that
 	// all scripts will run to completion. This is returned as part of the
 	// reply.
-	signErrs, err := w.SignTransaction(tx, hashType, inputs, keys, scripts)
+	signErrs, err := w.SignTransaction(ctx, tx, hashType, inputs, keys, scripts)
 	if err != nil {
 		return nil, err
 	}
@@ -3190,6 +3230,13 @@ func makeScriptChangeSource(address string, version uint16, params *chaincfg.Par
 	return source, nil
 }
 
+func sumOutputValues(outputs []*wire.TxOut) (totalOutput dcrutil.Amount) {
+	for _, txOut := range outputs {
+		totalOutput += dcrutil.Amount(txOut.Value)
+	}
+	return totalOutput
+}
+
 // sweepAccount handles the sweepaccount command.
 func (s *Server) sweepAccount(ctx context.Context, icmd interface{}) (interface{}, error) {
 	cmd := icmd.(*types.SweepAccountCmd)
@@ -3217,9 +3264,9 @@ func (s *Server) sweepAccount(ctx context.Context, icmd interface{}) (interface{
 		}
 	}
 
-	account, err := w.AccountNumber(cmd.SourceAccount)
+	account, err := w.AccountNumber(ctx, cmd.SourceAccount)
 	if err != nil {
-		if errors.Is(errors.NotExist, err) {
+		if errors.Is(err, errors.NotExist) {
 			return nil, errAccountNotFound
 		}
 		return nil, err
@@ -3229,10 +3276,10 @@ func (s *Server) sweepAccount(ctx context.Context, icmd interface{}) (interface{
 	if err != nil {
 		return nil, err
 	}
-	tx, err := w.NewUnsignedTransaction(nil, feePerKb, account,
+	tx, err := w.NewUnsignedTransaction(ctx, nil, feePerKb, account,
 		requiredConfs, wallet.OutputSelectionAlgorithmAll, changeSource)
 	if err != nil {
-		if errors.Is(errors.InsufficientBalance, err) {
+		if errors.Is(err, errors.InsufficientBalance) {
 			return nil, rpcError(dcrjson.ErrRPCWalletInsufficientFunds, err)
 		}
 		return nil, err
@@ -3248,7 +3295,7 @@ func (s *Server) sweepAccount(ctx context.Context, icmd interface{}) (interface{
 	res := &types.SweepAccountResult{
 		UnsignedTransaction:       b.String(),
 		TotalPreviousOutputAmount: tx.TotalInput.ToCoin(),
-		TotalOutputAmount:         helpers.SumOutputValues(tx.Tx.TxOut).ToCoin(),
+		TotalOutputAmount:         sumOutputValues(tx.Tx.TxOut).ToCoin(),
 		EstimatedSignedSize:       uint32(tx.EstimatedSignedSerializeSize),
 	}
 
@@ -3277,9 +3324,9 @@ func (s *Server) validateAddress(ctx context.Context, icmd interface{}) (interfa
 	result.Address = addr.Address()
 	result.IsValid = true
 
-	ainfo, err := w.AddressInfo(addr)
+	ainfo, err := w.AddressInfo(ctx, addr)
 	if err != nil {
-		if errors.Is(errors.NotExist, err) {
+		if errors.Is(err, errors.NotExist) {
 			// No additional information available about the address.
 			return result, nil
 		}
@@ -3289,7 +3336,7 @@ func (s *Server) validateAddress(ctx context.Context, icmd interface{}) (interfa
 	// The address lookup was successful which means there is further
 	// information about it available and it is "mine".
 	result.IsMine = true
-	acctName, err := w.AccountName(ainfo.Account())
+	acctName, err := w.AccountName(ctx, ainfo.Account())
 	if err != nil {
 		return nil, err
 	}
@@ -3315,9 +3362,9 @@ func (s *Server) validateAddress(ctx context.Context, icmd interface{}) (interfa
 
 		// The script is only available if the manager is unlocked, so
 		// just break out now if there is an error.
-		script, err := w.RedeemScriptCopy(addr)
+		script, err := w.RedeemScriptCopy(ctx, addr)
 		if err != nil {
-			if errors.Is(errors.Locked, err) {
+			if errors.Is(err, errors.Locked) {
 				break
 			}
 			return nil, err
@@ -3437,8 +3484,8 @@ func (s *Server) walletInfo(ctx context.Context, icmd interface{}) (interface{},
 		}
 	}
 
-	coinType, err := w.CoinType()
-	if errors.Is(errors.WatchingOnly, err) {
+	coinType, err := w.CoinType(ctx)
+	if errors.Is(err, errors.WatchingOnly) {
 		// This is a watching-only wallet, which does not store the active coin
 		// type. Return CoinTypes default value (0), which will be omitted from
 		// the JSON response, and log a debug message.
@@ -3509,7 +3556,7 @@ func (s *Server) walletPassphrase(ctx context.Context, icmd interface{}) (interf
 	if timeout != 0 {
 		unlockAfter = time.After(timeout)
 	}
-	err := w.Unlock([]byte(cmd.Passphrase), unlockAfter)
+	err := w.Unlock(ctx, []byte(cmd.Passphrase), unlockAfter)
 	return nil, err
 }
 
@@ -3527,10 +3574,10 @@ func (s *Server) walletPassphraseChange(ctx context.Context, icmd interface{}) (
 		return nil, errUnloadedWallet
 	}
 
-	err := w.ChangePrivatePassphrase([]byte(cmd.OldPassphrase),
+	err := w.ChangePrivatePassphrase(ctx, []byte(cmd.OldPassphrase),
 		[]byte(cmd.NewPassphrase))
 	if err != nil {
-		if errors.Is(errors.Passphrase, err) {
+		if errors.Is(err, errors.Passphrase) {
 			return nil, rpcErrorf(dcrjson.ErrRPCWalletPassphraseIncorrect, "incorrect passphrase")
 		}
 		return nil, err

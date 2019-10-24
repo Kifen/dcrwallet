@@ -17,11 +17,12 @@ package bdb_test
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"testing"
 
-	"github.com/decred/dcrwallet/errors"
+	"github.com/decred/dcrwallet/errors/v2"
 	"github.com/decred/dcrwallet/wallet/v3/walletdb"
 )
 
@@ -190,7 +191,7 @@ func testReadWriteBucketInterface(tc *testContext, bucket walletdb.ReadWriteBuck
 
 	// Ensure creating a bucket that already exists fails with the
 	// expected error.
-	if _, err := bucket.CreateBucket(testBucketName); !errors.Is(errors.Exist, err) {
+	if _, err := bucket.CreateBucket(testBucketName); !errors.Is(err, errors.Exist) {
 		tc.t.Errorf("CreateBucket: unexpected error: %v", err)
 		return false
 	}
@@ -225,7 +226,7 @@ func testReadWriteBucketInterface(tc *testContext, bucket walletdb.ReadWriteBuck
 
 	// Ensure deleting a bucket that doesn't exist returns the
 	// expected error.
-	if err := bucket.DeleteNestedBucket(testBucketName); !errors.Is(errors.NotExist, err) {
+	if err := bucket.DeleteNestedBucket(testBucketName); !errors.Is(err, errors.NotExist) {
 		tc.t.Errorf("DeleteBucket: unexpected error: %v", err)
 		return false
 	}
@@ -450,8 +451,9 @@ func testManualTxInterface(tc *testContext, bucketKey []byte) bool {
 // tests all facets of it interface as well as  transaction and bucket
 // interfaces under it.
 func testNamespaceAndTxInterfaces(tc *testContext, namespaceKey string) bool {
+	ctx := context.Background()
 	namespaceKeyBytes := []byte(namespaceKey)
-	err := walletdb.Update(tc.db, func(tx walletdb.ReadWriteTx) error {
+	err := walletdb.Update(ctx, tc.db, func(tx walletdb.ReadWriteTx) error {
 		_, err := tx.CreateTopLevelBucket(namespaceKeyBytes)
 		return err
 	})
@@ -461,7 +463,7 @@ func testNamespaceAndTxInterfaces(tc *testContext, namespaceKey string) bool {
 	}
 	defer func() {
 		// Remove the namespace now that the tests are done for it.
-		err := walletdb.Update(tc.db, func(tx walletdb.ReadWriteTx) error {
+		err := walletdb.Update(ctx, tc.db, func(tx walletdb.ReadWriteTx) error {
 			return tx.DeleteTopLevelBucket(namespaceKeyBytes)
 		})
 		if err != nil {
@@ -483,7 +485,7 @@ func testNamespaceAndTxInterfaces(tc *testContext, namespaceKey string) bool {
 	}
 
 	// Test the bucket interface via a managed read-only transaction.
-	err = walletdb.View(tc.db, func(tx walletdb.ReadTx) error {
+	err = walletdb.View(ctx, tc.db, func(tx walletdb.ReadTx) error {
 		rootBucket := tx.ReadBucket(namespaceKeyBytes)
 		if rootBucket == nil {
 			return fmt.Errorf("ReadBucket: unexpected nil root bucket")
@@ -492,7 +494,7 @@ func testNamespaceAndTxInterfaces(tc *testContext, namespaceKey string) bool {
 		return nil
 	})
 	if err != nil {
-		if err != errSubTestFail {
+		if !errors.Is(err, errSubTestFail) {
 			tc.t.Errorf("%v", err)
 		}
 		return false
@@ -502,7 +504,7 @@ func testNamespaceAndTxInterfaces(tc *testContext, namespaceKey string) bool {
 	// Also, put a series of values and force a rollback so the following
 	// code can ensure the values were not stored.
 	forceRollbackError := fmt.Errorf("force rollback")
-	err = walletdb.Update(tc.db, func(tx walletdb.ReadWriteTx) error {
+	err = walletdb.Update(ctx, tc.db, func(tx walletdb.ReadWriteTx) error {
 		rootBucket := tx.ReadWriteBucket(namespaceKeyBytes)
 		if rootBucket == nil {
 			return fmt.Errorf("ReadWriteBucket: unexpected nil root bucket")
@@ -520,8 +522,8 @@ func testNamespaceAndTxInterfaces(tc *testContext, namespaceKey string) bool {
 		// Return an error to force a rollback.
 		return forceRollbackError
 	})
-	if err != forceRollbackError {
-		if err == errSubTestFail {
+	if !errors.Is(err, forceRollbackError) {
+		if errors.Is(err, errSubTestFail) {
 			return false
 		}
 
@@ -532,7 +534,7 @@ func testNamespaceAndTxInterfaces(tc *testContext, namespaceKey string) bool {
 
 	// Ensure the values that should have not been stored due to the forced
 	// rollback above were not actually stored.
-	err = walletdb.View(tc.db, func(tx walletdb.ReadTx) error {
+	err = walletdb.View(ctx, tc.db, func(tx walletdb.ReadTx) error {
 		rootBucket := tx.ReadBucket(namespaceKeyBytes)
 		if rootBucket == nil {
 			return fmt.Errorf("ReadBucket: unexpected nil root bucket")
@@ -545,14 +547,14 @@ func testNamespaceAndTxInterfaces(tc *testContext, namespaceKey string) bool {
 		return nil
 	})
 	if err != nil {
-		if err != errSubTestFail {
+		if !errors.Is(err, errSubTestFail) {
 			tc.t.Errorf("%v", err)
 		}
 		return false
 	}
 
 	// Store a series of values via a managed read-write transaction.
-	err = walletdb.Update(tc.db, func(tx walletdb.ReadWriteTx) error {
+	err = walletdb.Update(ctx, tc.db, func(tx walletdb.ReadWriteTx) error {
 		rootBucket := tx.ReadWriteBucket(namespaceKeyBytes)
 		if rootBucket == nil {
 			return fmt.Errorf("ReadWriteBucket: unexpected nil root bucket")
@@ -565,14 +567,14 @@ func testNamespaceAndTxInterfaces(tc *testContext, namespaceKey string) bool {
 		return nil
 	})
 	if err != nil {
-		if err != errSubTestFail {
+		if !errors.Is(err, errSubTestFail) {
 			tc.t.Errorf("%v", err)
 		}
 		return false
 	}
 
 	// Ensure the values stored above were committed as expected.
-	err = walletdb.View(tc.db, func(tx walletdb.ReadTx) error {
+	err = walletdb.View(ctx, tc.db, func(tx walletdb.ReadTx) error {
 		rootBucket := tx.ReadBucket(namespaceKeyBytes)
 		if rootBucket == nil {
 			return fmt.Errorf("ReadBucket: unexpected nil root bucket")
@@ -585,14 +587,14 @@ func testNamespaceAndTxInterfaces(tc *testContext, namespaceKey string) bool {
 		return nil
 	})
 	if err != nil {
-		if err != errSubTestFail {
+		if !errors.Is(err, errSubTestFail) {
 			tc.t.Errorf("%v", err)
 		}
 		return false
 	}
 
 	// Clean up the values stored above in a managed read-write transaction.
-	err = walletdb.Update(tc.db, func(tx walletdb.ReadWriteTx) error {
+	err = walletdb.Update(ctx, tc.db, func(tx walletdb.ReadWriteTx) error {
 		rootBucket := tx.ReadWriteBucket(namespaceKeyBytes)
 		if rootBucket == nil {
 			return fmt.Errorf("ReadWriteBucket: unexpected nil root bucket")
@@ -605,7 +607,7 @@ func testNamespaceAndTxInterfaces(tc *testContext, namespaceKey string) bool {
 		return nil
 	})
 	if err != nil {
-		if err != errSubTestFail {
+		if !errors.Is(err, errSubTestFail) {
 			tc.t.Errorf("%v", err)
 		}
 		return false
@@ -617,9 +619,10 @@ func testNamespaceAndTxInterfaces(tc *testContext, namespaceKey string) bool {
 // testAdditionalErrors performs some tests for error cases not covered
 // elsewhere in the tests and therefore improves negative test coverage.
 func testAdditionalErrors(tc *testContext) bool {
+	ctx := context.Background()
 	ns3Key := []byte("ns3")
 
-	err := walletdb.Update(tc.db, func(tx walletdb.ReadWriteTx) error {
+	err := walletdb.Update(ctx, tc.db, func(tx walletdb.ReadWriteTx) error {
 		// Create a new namespace
 		rootBucket, err := tx.CreateTopLevelBucket(ns3Key)
 		if err != nil {
@@ -628,21 +631,21 @@ func testAdditionalErrors(tc *testContext) bool {
 
 		// Ensure CreateBucket returns the expected error when no bucket
 		// key is specified.
-		if _, err := rootBucket.CreateBucket(nil); !errors.Is(errors.Invalid, err) {
+		if _, err := rootBucket.CreateBucket(nil); !errors.Is(err, errors.Invalid) {
 			return fmt.Errorf("CreateBucket: unexpected error - "+
 				"got %v, want %v", err, errors.Invalid)
 		}
 
 		// Ensure DeleteNestedBucket returns the expected error when no bucket
 		// key is specified.
-		if err := rootBucket.DeleteNestedBucket(nil); !errors.Is(errors.Invalid, err) {
+		if err := rootBucket.DeleteNestedBucket(nil); !errors.Is(err, errors.Invalid) {
 			return fmt.Errorf("DeleteNestedBucket: unexpected error - "+
 				"got %v, want %v", err, errors.Invalid)
 		}
 
 		// Ensure Put returns the expected error when no key is
 		// specified.
-		if err := rootBucket.Put(nil, nil); !errors.Is(errors.Invalid, err) {
+		if err := rootBucket.Put(nil, nil); !errors.Is(err, errors.Invalid) {
 			return fmt.Errorf("Put: unexpected error - got %v, "+
 				"want %v", err, errors.Invalid)
 		}
@@ -650,7 +653,7 @@ func testAdditionalErrors(tc *testContext) bool {
 		return nil
 	})
 	if err != nil {
-		if err != errSubTestFail {
+		if !errors.Is(err, errSubTestFail) {
 			tc.t.Errorf("%v", err)
 		}
 		return false
@@ -667,12 +670,12 @@ func testAdditionalErrors(tc *testContext) bool {
 		tc.t.Errorf("Rollback: unexpected error: %v", err)
 		return false
 	}
-	if err := tx.Rollback(); !errors.Is(errors.Invalid, err) {
+	if err := tx.Rollback(); !errors.Is(err, errors.Invalid) {
 		tc.t.Errorf("Rollback: unexpected error - got %v, want %v", err,
 			errors.Invalid)
 		return false
 	}
-	if err := tx.Commit(); !errors.Is(errors.Invalid, err) {
+	if err := tx.Commit(); !errors.Is(err, errors.Invalid) {
 		tc.t.Errorf("Commit: unexpected error - got %v, want %v", err,
 			errors.Invalid)
 		return false

@@ -7,7 +7,7 @@ require (
 	github.com/decred/dcrd/dcrutil/v2 v2.0.0
 	github.com/decred/dcrd/gcs v1.1.0
 	github.com/decred/dcrd/wire v1.2.0
-	github.com/decred/dcrwallet/errors v1.1.0
+	github.com/decred/dcrwallet/errors/v2 v2.0.0
 	github.com/fsnotify/fsnotify v1.4.7 // indirect
 	github.com/golang/protobuf v1.3.2 // indirect
 	github.com/hpcloud/tail v1.0.0 // indirect

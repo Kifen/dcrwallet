@@ -10,7 +10,7 @@ import (
 	"encoding/binary"
 	"time"
 
-	"github.com/decred/dcrwallet/errors"
+	"github.com/decred/dcrwallet/errors/v2"
 	"github.com/decred/dcrwallet/wallet/v3/walletdb"
 )
 
@@ -177,6 +177,10 @@ var (
 	// lastAccountName is used to store the metadata - last account
 	// in the manager
 	lastAccountName = []byte("lastaccount")
+
+	// lastImportedAccountName is the metadata key use for the last imported
+	// xpub account.
+	lastImportedAccountName = []byte("lastimportedaccount")
 
 	mainBucketName = []byte("main")
 
@@ -672,6 +676,27 @@ func fetchLastAccount(ns walletdb.ReadBucket) (uint32, error) {
 	return account, nil
 }
 
+// fetchLastImportedAccount retreives the last imported xpub account from the
+// database.
+func fetchLastImportedAccount(ns walletdb.ReadBucket) (uint32, error) {
+	bucket := ns.NestedReadBucket(metaBucketName)
+
+	val := bucket.Get(lastImportedAccountName)
+	// TODO: add this, set to old imported account num in db upgrade
+	// TODO: also remove this hack
+	if len(val) == 0 {
+		return ImportedAddrAccount, nil
+	}
+	if len(val) != 4 {
+		return 0, errors.E(errors.IO, errors.Errorf("bad last imported account len %d", len(val)))
+	}
+	account := binary.LittleEndian.Uint32(val[0:4])
+	if account <= MaxAccountNum {
+		return 0, errors.E(errors.IO, errors.Errorf("bad imported xpub account value %d", account))
+	}
+	return account, nil
+}
+
 // fetchAccountName retreives the account name given an account number from
 // the database.
 func fetchAccountName(ns walletdb.ReadBucket, account uint32) (string, error) {
@@ -826,6 +851,17 @@ func putLastAccount(ns walletdb.ReadWriteBucket, account uint32) error {
 	bucket := ns.NestedReadWriteBucket(metaBucketName)
 
 	err := bucket.Put(lastAccountName, uint32ToBytes(account))
+	if err != nil {
+		return errors.E(errors.IO, err)
+	}
+	return nil
+}
+
+// putLastImportedAccount stores the provided metadata - last account - to the database.
+func putLastImportedAccount(ns walletdb.ReadWriteBucket, account uint32) error {
+	bucket := ns.NestedReadWriteBucket(metaBucketName)
+
+	err := bucket.Put(lastImportedAccountName, uint32ToBytes(account))
 	if err != nil {
 		return errors.E(errors.IO, err)
 	}
@@ -1054,7 +1090,7 @@ func fetchAddressByHash(ns walletdb.ReadBucket, addrHash []byte) (interface{}, e
 func fetchAddress(ns walletdb.ReadBucket, addressID []byte) (interface{}, error) {
 	addrHash := sha256.Sum256(addressID)
 	addr, err := fetchAddressByHash(ns, addrHash[:])
-	if errors.Is(errors.NotExist, err) {
+	if errors.Is(err, errors.NotExist) {
 		return nil, errors.E(errors.NotExist, errors.Errorf("no address with id %x", addressID))
 	}
 	return addr, err

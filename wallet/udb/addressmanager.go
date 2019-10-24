@@ -9,14 +9,14 @@ import (
 	"crypto/rand"
 	"crypto/sha512"
 	"fmt"
+	"math/big"
 	"sync"
 
 	"github.com/decred/dcrd/chaincfg/v2"
 	"github.com/decred/dcrd/chaincfg/v2/chainec"
 	"github.com/decred/dcrd/dcrutil/v2"
 	"github.com/decred/dcrd/hdkeychain/v2"
-	"github.com/decred/dcrwallet/errors"
-	"github.com/decred/dcrwallet/internal/zero"
+	"github.com/decred/dcrwallet/errors/v2"
 	"github.com/decred/dcrwallet/wallet/v3/internal/compat"
 	"github.com/decred/dcrwallet/wallet/v3/internal/snacl"
 	"github.com/decred/dcrwallet/wallet/v3/walletdb"
@@ -292,6 +292,20 @@ type Manager struct {
 	hashedPrivPassphrase [sha512.Size]byte
 }
 
+func zero(b []byte) {
+	for i := range b {
+		b[i] = 0
+	}
+}
+
+func zeroBigInt(x *big.Int) {
+	b := x.Bits()
+	for i := range b {
+		b[i] = 0
+	}
+	x.SetInt64(0)
+}
+
 // lock performs a best try effort to remove and zero all secret keys associated
 // with the address manager.
 //
@@ -308,10 +322,10 @@ func (m *Manager) lock() {
 	// Remove clear text private keys and scripts from all address entries.
 	m.returnedSecretsMu.Lock()
 	for _, privKey := range m.returnedPrivKeys {
-		zero.BigInt(privKey.GetD())
+		zeroBigInt(privKey.GetD())
 	}
 	for _, script := range m.returnedScripts {
-		zero.Bytes(script)
+		zero(script)
 	}
 	m.returnedPrivKeys = nil
 	m.returnedScripts = nil
@@ -323,7 +337,7 @@ func (m *Manager) lock() {
 	m.masterKeyPriv.Zero()
 
 	// Zero the hashed passphrase.
-	zero.Bytea64(&m.hashedPrivPassphrase)
+	m.hashedPrivPassphrase = [64]byte{}
 
 	// NOTE: m.cryptoKeyPub is intentionally not cleared here as the address
 	// manager needs to be able to continue to read and decrypt public data
@@ -454,7 +468,7 @@ func (m *Manager) loadAccountInfo(ns walletdb.ReadBucket, account uint32) (*acco
 	// load the information from the database.
 	row, err := fetchAccountInfo(ns, account, DBVersion)
 	if err != nil {
-		if errors.Is(errors.NotExist, err) {
+		if errors.Is(err, errors.NotExist) {
 			return nil, err
 		}
 		return nil, errors.E(errors.NotExist, errors.Errorf("no account %d", account))
@@ -576,7 +590,7 @@ func (m *Manager) AccountExtendedPubKey(dbtx walletdb.ReadTx, account uint32) (*
 // unlocked for this operation to complete.
 func (m *Manager) AccountExtendedPrivKey(dbtx walletdb.ReadTx, account uint32) (*hdkeychain.ExtendedKey, error) {
 	if account == ImportedAddrAccount {
-		return nil, errors.E(errors.Invalid, "imported account has no extended pubkey")
+		return nil, errors.E(errors.Invalid, "imported address account has no extended pubkey")
 	}
 
 	ns := dbtx.ReadBucket(waddrmgrBucketKey)
@@ -634,7 +648,7 @@ func (m *Manager) CoinTypePrivKey(dbtx walletdb.ReadTx) (*hdkeychain.ExtendedKey
 		return nil, errors.E(errors.Crypto, errors.Errorf("decrypt cointype privkey: %v", err))
 	}
 	coinTypeKeyPriv, err := hdkeychain.NewKeyFromString(string(serializedKeyPriv), m.chainParams)
-	zero.Bytes(serializedKeyPriv)
+	zero(serializedKeyPriv)
 	if err != nil {
 		return nil, errors.E(errors.IO, err)
 	}
@@ -804,6 +818,10 @@ func (m *Manager) UpgradeToSLIP0044CoinType(dbtx walletdb.ReadWriteTx) error {
 //
 // This function MUST be called with the manager lock held for writes.
 func (m *Manager) deriveKeyFromPath(ns walletdb.ReadBucket, account, branch, index uint32, private bool) (*hdkeychain.ExtendedKey, error) {
+	if private && account > ImportedAddrAccount {
+		return nil, errors.E(errors.Invalid, "account does not record private keys")
+	}
+
 	// Look up the account key information.
 	acctInfo, err := m.loadAccountInfo(ns, account)
 	if err != nil {
@@ -818,8 +836,12 @@ func (m *Manager) deriveKeyFromPath(ns walletdb.ReadBucket, account, branch, ind
 //
 // This function MUST be called with the manager lock held for writes.
 func (m *Manager) chainAddressRowToManaged(ns walletdb.ReadBucket, row *dbChainAddressRow) (ManagedAddress, error) {
+	private := !m.locked
+	if row.account > ImportedAddrAccount {
+		private = false
+	}
 	addressKey, err := m.deriveKeyFromPath(ns, row.account, row.branch,
-		row.index, !m.locked)
+		row.index, private)
 	if err != nil {
 		return nil, err
 	}
@@ -891,7 +913,7 @@ func (m *Manager) loadAddress(ns walletdb.ReadBucket, address dcrutil.Address) (
 	// Attempt to load the raw address information from the database.
 	rowInterface, err := fetchAddress(ns, address.ScriptAddress())
 	if err != nil {
-		if errors.Is(errors.NotExist, err) {
+		if errors.Is(err, errors.NotExist) {
 			return nil, errors.E(errors.NotExist, errors.Errorf("no address %s", address))
 		}
 		return nil, err
@@ -910,9 +932,9 @@ func (m *Manager) loadAddress(ns walletdb.ReadBucket, address dcrutil.Address) (
 // pay-to-script-hash addresses.
 func (m *Manager) Address(ns walletdb.ReadBucket, address dcrutil.Address) (ManagedAddress, error) {
 	address = normalizeAddress(address)
+	defer m.mtx.Unlock()
 	m.mtx.Lock()
 	ma, err := m.loadAddress(ns, address)
-	m.mtx.Unlock()
 	return ma, err
 }
 
@@ -920,7 +942,7 @@ func (m *Manager) Address(ns walletdb.ReadBucket, address dcrutil.Address) (Mana
 func (m *Manager) AddrAccount(ns walletdb.ReadBucket, address dcrutil.Address) (uint32, error) {
 	acct, err := fetchAddrAccount(ns, normalizeAddress(address).ScriptAddress())
 	if err != nil {
-		if errors.Is(errors.NotExist, err) {
+		if errors.Is(err, errors.NotExist) {
 			return 0, errors.E(errors.NotExist, errors.Errorf("no address %v", address))
 		}
 		return 0, err
@@ -990,7 +1012,7 @@ func (m *Manager) ChangePassphrase(ns walletdb.ReadWriteBucket, oldPassphrase, n
 			return errors.E(errors.Crypto, errors.Errorf("decrypt crypto privkey: %v", err))
 		}
 		encPriv, err := newMasterKey.Encrypt(decPriv)
-		zero.Bytes(decPriv)
+		zero(decPriv)
 		if err != nil {
 			return errors.E(errors.Crypto, errors.Errorf("encrypt crypto privkey: %v", err))
 		}
@@ -1002,7 +1024,7 @@ func (m *Manager) ChangePassphrase(ns walletdb.ReadWriteBucket, oldPassphrase, n
 			return errors.E(errors.Crypto, errors.Errorf("decrypt crypto script key: %v", err))
 		}
 		encScript, err := newMasterKey.Encrypt(decScript)
-		zero.Bytes(decScript)
+		zero(decScript)
 		if err != nil {
 			return errors.E(errors.Crypto, errors.Errorf("encrypt crypto script key: %v", err))
 		}
@@ -1018,7 +1040,7 @@ func (m *Manager) ChangePassphrase(ns walletdb.ReadWriteBucket, oldPassphrase, n
 			saltedPassphrase := append(passphraseSalt[:],
 				newPassphrase...)
 			hashedPassphrase = sha512.Sum512(saltedPassphrase)
-			zero.Bytes(saltedPassphrase)
+			zero(saltedPassphrase)
 		}
 
 		// Save the new keys and params to the the db in a single
@@ -1114,7 +1136,7 @@ func (m *Manager) ConvertToWatchingOnly(ns walletdb.ReadWriteBucket) error {
 
 	// Clear and remove all of the encrypted acount private keys.
 	for _, acctInfo := range m.acctInfo {
-		zero.Bytes(acctInfo.acctKeyEncrypted)
+		zero(acctInfo.acctKeyEncrypted)
 		acctInfo.acctKeyEncrypted = nil
 	}
 
@@ -1122,20 +1144,20 @@ func (m *Manager) ConvertToWatchingOnly(ns walletdb.ReadWriteBucket) error {
 	// all address entries.
 	m.returnedSecretsMu.Lock()
 	for _, privKey := range m.returnedPrivKeys {
-		zero.BigInt(privKey.GetD())
+		zeroBigInt(privKey.GetD())
 	}
 	for _, script := range m.returnedScripts {
-		zero.Bytes(script)
+		zero(script)
 	}
 	m.returnedPrivKeys = nil
 	m.returnedScripts = nil
 	m.returnedSecretsMu.Unlock()
 
 	// Clear and remove encrypted private and script crypto keys.
-	zero.Bytes(m.cryptoKeyScriptEncrypted)
+	zero(m.cryptoKeyScriptEncrypted)
 	m.cryptoKeyScriptEncrypted = nil
 	m.cryptoKeyScript = nil
-	zero.Bytes(m.cryptoKeyPrivEncrypted)
+	zero(m.cryptoKeyPrivEncrypted)
 	m.cryptoKeyPrivEncrypted = nil
 	m.cryptoKeyPriv = nil
 
@@ -1199,7 +1221,7 @@ func (m *Manager) ImportPrivateKey(ns walletdb.ReadWriteBucket, wif *dcrutil.WIF
 	if !m.watchingOnly {
 		privKeyBytes := wif.PrivKey.Serialize()
 		encryptedPrivKey, err = m.cryptoKeyPriv.Encrypt(privKeyBytes)
-		zero.Bytes(privKeyBytes)
+		zero(privKeyBytes)
 		if err != nil {
 			return nil, errors.E(errors.Crypto, errors.Errorf("encrypt imported privkey: %v", err))
 		}
@@ -1279,6 +1301,53 @@ func (m *Manager) ImportScript(ns walletdb.ReadWriteBucket, script []byte) (Mana
 	return newScriptAddress(m, ImportedAddrAccount, scriptHash)
 }
 
+func (m *Manager) ImportXpubAccount(ns walletdb.ReadWriteBucket, name string, xpub *hdkeychain.ExtendedKey) error {
+	defer m.mtx.Unlock()
+	m.mtx.Lock()
+
+	// Validate account name
+	if err := ValidateAccountName(name); err != nil {
+		return err
+	}
+
+	// There may not be an account by the same name
+	if _, err := fetchAccountByName(ns, name); err == nil {
+		return errors.E(errors.Exist, "account name in use")
+	}
+
+	// Reserve next imported account number
+	account, err := fetchLastImportedAccount(ns)
+	if err != nil {
+		return err
+	}
+	account++
+	if account < MaxAccountNum {
+		return errors.E(errors.Invalid, "exhausted possible imported accounts")
+	}
+
+	// Encrypt the default account keys with the associated crypto keys.
+	apes := xpub.String()
+	acctPubEnc, err := m.cryptoKeyPub.Encrypt([]byte(apes))
+	if err != nil {
+		return errors.E(errors.Crypto, errors.Errorf("encrypt account pubkey: %v", err))
+	}
+	// We have the encrypted account extended keys, so save them to the
+	// database
+	row := bip0044AccountInfo(acctPubEnc, nil, 0, 0,
+		^uint32(0), ^uint32(0), ^uint32(0), ^uint32(0), name, DBVersion)
+	err = putAccountInfo(ns, account, row)
+	if err != nil {
+		return err
+	}
+
+	// Save last imported account metadata
+	if err := putLastImportedAccount(ns, account); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 // IsLocked returns whether or not the address managed is locked.  When it is
 // unlocked, the decryption key needed to decrypt private keys used for signing
 // is in memory.
@@ -1339,7 +1408,7 @@ func (m *Manager) UnlockedWithPassphrase(passphrase []byte) error {
 
 	saltedPassphrase := append(m.privPassphraseSalt[:], passphrase...)
 	hashedPassphrase := sha512.Sum512(saltedPassphrase)
-	zero.Bytes(saltedPassphrase)
+	zero(saltedPassphrase)
 	if hashedPassphrase != m.hashedPrivPassphrase {
 		return errors.E(errors.Passphrase)
 	}
@@ -1370,7 +1439,7 @@ func (m *Manager) Unlock(ns walletdb.ReadBucket, passphrase []byte) error {
 		saltedPassphrase := append(m.privPassphraseSalt[:],
 			passphrase...)
 		hashedPassphrase := sha512.Sum512(saltedPassphrase)
-		zero.Bytes(saltedPassphrase)
+		zero(saltedPassphrase)
 		if hashedPassphrase != m.hashedPrivPassphrase {
 			m.lock()
 			return errors.E(errors.Passphrase)
@@ -1391,11 +1460,14 @@ func (m *Manager) Unlock(ns walletdb.ReadBucket, passphrase []byte) error {
 		return errors.E(errors.Crypto, errors.Errorf("decrypt crypto privkey: %v", err))
 	}
 	m.cryptoKeyPriv.CopyBytes(decryptedKey)
-	zero.Bytes(decryptedKey)
+	zero(decryptedKey)
 
 	// Use the crypto private key to decrypt all of the account private
 	// extended keys.
 	for account, acctInfo := range m.acctInfo {
+		if account > ImportedAddrAccount {
+			continue
+		}
 		decrypted, err := m.cryptoKeyPriv.Decrypt(acctInfo.acctKeyEncrypted)
 		if err != nil {
 			m.lock()
@@ -1403,7 +1475,7 @@ func (m *Manager) Unlock(ns walletdb.ReadBucket, passphrase []byte) error {
 		}
 
 		acctKeyPriv, err := hdkeychain.NewKeyFromString(string(decrypted), m.chainParams)
-		zero.Bytes(decrypted)
+		zero(decrypted)
 		if err != nil {
 			m.lock()
 			return errors.E(errors.IO, err)
@@ -1414,7 +1486,7 @@ func (m *Manager) Unlock(ns walletdb.ReadBucket, passphrase []byte) error {
 	m.locked = false
 	saltedPassphrase := append(m.privPassphraseSalt[:], passphrase...)
 	m.hashedPrivPassphrase = sha512.Sum512(saltedPassphrase)
-	zero.Bytes(saltedPassphrase)
+	zero(saltedPassphrase)
 	return nil
 }
 
@@ -1589,7 +1661,7 @@ func (m *Manager) syncAccountToAddrIndex(ns walletdb.ReadWriteBucket, account ui
 		if err != nil {
 			return err
 		}
-		if m.locked {
+		if m.locked || account > ImportedAddrAccount {
 			break
 		}
 		xprivBranch, err = acctInfo.acctKeyPriv.Child(branch)
@@ -1616,7 +1688,7 @@ func (m *Manager) syncAccountToAddrIndex(ns walletdb.ReadWriteBucket, account ui
 	// been created.
 	for child := syncToIndex; ; child-- {
 		xpubChild, err := xpubBranch.Child(child)
-		if err == hdkeychain.ErrInvalidChild {
+		if errors.Is(err, hdkeychain.ErrInvalidChild) {
 			continue
 		}
 		if err != nil {
@@ -1644,18 +1716,13 @@ func (m *Manager) syncAccountToAddrIndex(ns walletdb.ReadWriteBucket, account ui
 	return nil
 }
 
-// SyncAccountToAddrIndex returns the specified number of next chained addresses
-// that are intended for internal use such as change from the address manager.
+// SyncAccountToAddrIndex records address records for an account branch up to
+// syncToIndex.  It does not modify the last used or last returned properties of
+// the account branch.
 func (m *Manager) SyncAccountToAddrIndex(ns walletdb.ReadWriteBucket, account uint32, syncToIndex uint32, branch uint32) error {
-	// Enforce maximum account number.
-	if account > MaxAccountNum {
-		return errors.E(errors.Invalid, errors.Errorf("account %d", account))
-	}
-
+	defer m.mtx.Unlock()
 	m.mtx.Lock()
-	err := m.syncAccountToAddrIndex(ns, account, syncToIndex, branch)
-	m.mtx.Unlock()
-	return err
+	return m.syncAccountToAddrIndex(ns, account, syncToIndex, branch)
 }
 
 // ValidateAccountName validates the given account name and returns an error,
@@ -1719,7 +1786,7 @@ func (m *Manager) NewAccount(ns walletdb.ReadWriteBucket, name string) (uint32, 
 	}
 	coinTypeKeyPriv, err :=
 		hdkeychain.NewKeyFromString(string(serializedKeyPriv), m.chainParams)
-	zero.Bytes(serializedKeyPriv)
+	zero(serializedKeyPriv)
 	if err != nil {
 		return 0, errors.E(errors.IO, err)
 	}
@@ -1831,6 +1898,14 @@ func (m *Manager) LastAccount(ns walletdb.ReadBucket) (uint32, error) {
 	return fetchLastAccount(ns)
 }
 
+// LastImportedAccount returns the acocunt number of the last imported account.
+// This is the reserved imported account unless an account has been created by
+// an imported xpub.
+func (m *Manager) LastImportedAccount(dbtx walletdb.ReadTx) (uint32, error) {
+	ns := dbtx.ReadBucket(waddrmgrBucketKey)
+	return fetchLastImportedAccount(ns)
+}
+
 // ForEachAccountAddress calls the given function with each address of
 // the given account stored in the manager, breaking early on error.
 func (m *Manager) ForEachAccountAddress(ns walletdb.ReadBucket, account uint32, fn func(maddr ManagedAddress) error) error {
@@ -1933,7 +2008,7 @@ func (m *Manager) PrivateKey(ns walletdb.ReadBucket, addr dcrutil.Address) (key 
 		key, _ = chainec.Secp256k1.PrivKeyFromBytes(privKeyBytes)
 		// PrivKeyFromBytes creates a copy of the private key, and therefore
 		// the decrypted private key bytes must be zeroed now.
-		zero.Bytes(privKeyBytes)
+		zero(privKeyBytes)
 
 	case *dbScriptAddressRow:
 		return nil, nil, errors.E(errors.Invalid, "no private key for P2SH address")
@@ -2230,7 +2305,7 @@ func loadManager(ns walletdb.ReadBucket, pubPassphrase []byte, chainParams *chai
 		return nil, errors.E(errors.Crypto, errors.Errorf("decrypt crypto pubkey: %v", err))
 	}
 	cryptoKeyPub.CopyBytes(cryptoKeyPubCT)
-	zero.Bytes(cryptoKeyPubCT)
+	zero(cryptoKeyPubCT)
 
 	// Generate private passphrase salt.
 	var privPassphraseSalt [saltSize]byte
@@ -2311,7 +2386,7 @@ func createAddressManager(ns walletdb.ReadWriteBucket, seed, pubPassphrase, priv
 	if err != nil {
 		// The seed is unusable if the any of the children in the
 		// required hierarchy can't be derived due to invalid child.
-		if err == hdkeychain.ErrInvalidChild {
+		if errors.Is(err, hdkeychain.ErrInvalidChild) {
 			return errors.E(errors.Seed, hdkeychain.ErrUnusableSeed)
 		}
 
@@ -2321,7 +2396,7 @@ func createAddressManager(ns walletdb.ReadWriteBucket, seed, pubPassphrase, priv
 	if err != nil {
 		// The seed is unusable if the any of the children in the
 		// required hierarchy can't be derived due to invalid child.
-		if err == hdkeychain.ErrInvalidChild {
+		if errors.Is(err, hdkeychain.ErrInvalidChild) {
 			return errors.E(errors.Seed, hdkeychain.ErrUnusableSeed)
 		}
 
@@ -2333,7 +2408,7 @@ func createAddressManager(ns walletdb.ReadWriteBucket, seed, pubPassphrase, priv
 	if err := checkBranchKeys(acctKeyLegacyPriv); err != nil {
 		// The seed is unusable if the any of the children in the
 		// required hierarchy can't be derived due to invalid child.
-		if err == hdkeychain.ErrInvalidChild {
+		if errors.Is(err, hdkeychain.ErrInvalidChild) {
 			return errors.E(errors.Seed, hdkeychain.ErrUnusableSeed)
 		}
 
@@ -2342,7 +2417,7 @@ func createAddressManager(ns walletdb.ReadWriteBucket, seed, pubPassphrase, priv
 	if err := checkBranchKeys(acctKeySLIP0044Priv); err != nil {
 		// The seed is unusable if the any of the children in the
 		// required hierarchy can't be derived due to invalid child.
-		if err == hdkeychain.ErrInvalidChild {
+		if errors.Is(err, hdkeychain.ErrInvalidChild) {
 			return errors.E(errors.Seed, hdkeychain.ErrUnusableSeed)
 		}
 
@@ -2566,7 +2641,7 @@ func createWatchOnly(ns walletdb.ReadWriteBucket, hdPubKey string, pubPassphrase
 	if err != nil {
 		// The seed is unusable if the any of the children in the
 		// required hierarchy can't be derived due to invalid child.
-		if err == hdkeychain.ErrInvalidChild {
+		if errors.Is(err, hdkeychain.ErrInvalidChild) {
 			return errors.E(errors.Seed, hdkeychain.ErrUnusableSeed)
 		}
 
@@ -2578,7 +2653,7 @@ func createWatchOnly(ns walletdb.ReadWriteBucket, hdPubKey string, pubPassphrase
 	if err := checkBranchKeys(acctKeyPub); err != nil {
 		// The seed is unusable if the any of the children in the
 		// required hierarchy can't be derived due to invalid child.
-		if err == hdkeychain.ErrInvalidChild {
+		if errors.Is(err, hdkeychain.ErrInvalidChild) {
 			return errors.E(errors.Seed, hdkeychain.ErrUnusableSeed)
 		}
 

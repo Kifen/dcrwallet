@@ -8,10 +8,11 @@ package bdb_test
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"testing"
 
-	"github.com/decred/dcrwallet/errors"
+	"github.com/decred/dcrwallet/errors/v2"
 	_ "github.com/decred/dcrwallet/wallet/v3/internal/bdb"
 	"github.com/decred/dcrwallet/wallet/v3/walletdb"
 )
@@ -24,7 +25,7 @@ const dbType = "bdb"
 func TestCreateOpenFail(t *testing.T) {
 	// Ensure that attempting to open a database that doesn't exist returns
 	// the expected error.
-	if _, err := walletdb.Open(dbType, "noexist.db"); !errors.Is(errors.NotExist, err) {
+	if _, err := walletdb.Open(dbType, "noexist.db"); !errors.Is(err, errors.NotExist) {
 		t.Errorf("Open: unexpected error: %v", err)
 		return
 	}
@@ -80,7 +81,7 @@ func TestCreateOpenFail(t *testing.T) {
 	defer os.Remove(dbPath)
 	db.Close()
 
-	if _, err := db.BeginReadTx(); !errors.Is(errors.Invalid, err) {
+	if _, err := db.BeginReadTx(); !errors.Is(err, errors.Invalid) {
 		t.Errorf("BeginReadTx: unexpected error: %v", err)
 		return
 	}
@@ -89,6 +90,7 @@ func TestCreateOpenFail(t *testing.T) {
 // TestPersistence ensures that values stored are still valid after closing and
 // reopening the database.
 func TestPersistence(t *testing.T) {
+	ctx := context.Background()
 	// Create a new database to run tests against.
 	dbPath := "persistencetest.db"
 	db, err := walletdb.Create(dbType, dbPath)
@@ -108,7 +110,7 @@ func TestPersistence(t *testing.T) {
 	}
 	ns1Key := []byte("ns1")
 
-	walletdb.Update(db, func(tx walletdb.ReadWriteTx) error {
+	walletdb.Update(ctx, db, func(tx walletdb.ReadWriteTx) error {
 		ns1Bkt, err := tx.CreateTopLevelBucket(ns1Key)
 		if err != nil {
 			return errors.E(errors.IO, err)
@@ -138,7 +140,7 @@ func TestPersistence(t *testing.T) {
 
 	// Ensure the values previously stored in the bucket still exist
 	// and are correct.
-	walletdb.View(db, func(tx walletdb.ReadTx) error {
+	walletdb.View(ctx, db, func(tx walletdb.ReadTx) error {
 		ns1Bkt := tx.ReadBucket(ns1Key)
 		for k, v := range storeValues {
 			val := ns1Bkt.Get([]byte(k))

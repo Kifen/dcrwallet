@@ -17,7 +17,7 @@ import (
 	"github.com/decred/dcrd/chaincfg/chainhash"
 	"github.com/decred/dcrd/gcs/blockcf"
 	"github.com/decred/dcrd/wire"
-	"github.com/decred/dcrwallet/errors"
+	"github.com/decred/dcrwallet/errors/v2"
 	"github.com/decred/dcrwallet/lru"
 	"github.com/decred/dcrwallet/p2p/v2"
 	"github.com/decred/dcrwallet/validate"
@@ -124,14 +124,6 @@ func NewSyncer(w *wallet.Wallet, lp *p2p.LocalPeer) *Syncer {
 // SetPersistentPeers sets each peer as a persistent peer and disables DNS
 // seeding and peer discovery.
 func (s *Syncer) SetPersistentPeers(peers []string) {
-	s.persistentPeers = peers
-}
-
-// SetPersistantPeers sets each peer as a persistent peer and disables DNS
-// seeding and peer discovery.
-//
-// Deprecated: use SetPersistentPeers instead.
-func (s *Syncer) SetPersistantPeers(peers []string) {
 	s.persistentPeers = peers
 }
 
@@ -259,14 +251,14 @@ func (s *Syncer) tipChanged(tip *wire.BlockHeader, reorgDepth int32, matchingTxs
 // Run synchronizes the wallet, returning when synchronization fails or the
 // context is cancelled.
 func (s *Syncer) Run(ctx context.Context) error {
-	tipHash, tipHeight := s.wallet.MainChainTip()
-	rescanPoint, err := s.wallet.RescanPoint()
+	tipHash, tipHeight := s.wallet.MainChainTip(ctx)
+	rescanPoint, err := s.wallet.RescanPoint(ctx)
 	if err != nil {
 		return err
 	}
 	log.Infof("Headers synced through block %v height %d", &tipHash, tipHeight)
 	if rescanPoint != nil {
-		h, err := s.wallet.BlockHeader(rescanPoint)
+		h, err := s.wallet.BlockHeader(ctx, rescanPoint)
 		if err != nil {
 			return err
 		}
@@ -277,7 +269,7 @@ func (s *Syncer) Run(ctx context.Context) error {
 		log.Infof("Transactions synced through block %v height %d", &tipHash, tipHeight)
 	}
 
-	locators, err := s.wallet.BlockLocators(nil)
+	locators, err := s.wallet.BlockLocators(ctx, nil)
 	if err != nil {
 		return err
 	}
@@ -311,6 +303,9 @@ func (s *Syncer) Run(ctx context.Context) error {
 	} else {
 		g.Go(func() error { return s.connectToCandidates(ctx) })
 	}
+
+	s.wallet.SetNetworkBackend(s)
+	defer s.wallet.SetNetworkBackend(nil)
 
 	// Wait until cancellation or a handler errors.
 	return g.Wait()
@@ -553,8 +548,8 @@ func (s *Syncer) receiveGetData(ctx context.Context) error {
 			if len(txHashes) != 0 {
 				var missing []*wire.InvVect
 				var err error
-				foundTxs, missing, err = s.wallet.GetTransactionsByHashes(txHashes)
-				if err != nil && !errors.Is(errors.NotExist, err) {
+				foundTxs, missing, err = s.wallet.GetTransactionsByHashes(ctx, txHashes)
+				if err != nil && !errors.Is(err, errors.NotExist) {
 					log.Warnf("Failed to look up transactions for getdata reply to peer %v: %v",
 						rp.RemoteAddr(), err)
 					return
@@ -627,7 +622,7 @@ func (s *Syncer) receiveInv(ctx context.Context) error {
 					if ctx.Err() != nil {
 						return
 					}
-					if errors.Is(errors.Protocol, err) || errors.Is(errors.Consensus, err) {
+					if errors.Is(err, errors.Protocol) || errors.Is(err, errors.Consensus) {
 						log.Warnf("Disconnecting peer %v: %v", rp, err)
 						rp.Disconnect(err)
 						return
@@ -675,7 +670,7 @@ func (s *Syncer) handleBlockInvs(ctx context.Context, rp *p2p.RemotePeer, hashes
 func (s *Syncer) handleTxInvs(ctx context.Context, rp *p2p.RemotePeer, hashes []*chainhash.Hash) {
 	const opf = "spv.handleTxInvs(%v)"
 
-	rpt, err := s.wallet.RescanPoint()
+	rpt, err := s.wallet.RescanPoint(ctx)
 	if err != nil {
 		op := errors.Opf(opf, rp.RemoteAddr())
 		log.Warn(errors.E(op, err))
@@ -697,7 +692,7 @@ func (s *Syncer) handleTxInvs(ctx context.Context, rp *p2p.RemotePeer, hashes []
 	}
 
 	txs, err := rp.Transactions(ctx, unseen)
-	if errors.Is(errors.NotExist, err) {
+	if errors.Is(err, errors.NotExist) {
 		err = nil
 		// Remove notfound txs.
 		prevTxs, prevUnseen := txs, unseen
@@ -727,7 +722,7 @@ func (s *Syncer) handleTxInvs(ctx context.Context, rp *p2p.RemotePeer, hashes []
 	// Save any relevant transaction.
 	relevant := s.filterRelevant(txs)
 	for _, tx := range relevant {
-		err := s.wallet.AcceptMempoolTx(tx)
+		err := s.wallet.AcceptMempoolTx(ctx, tx)
 		if err != nil {
 			op := errors.Opf(opf, rp.RemoteAddr())
 			log.Warn(errors.E(op, err))
@@ -753,7 +748,7 @@ func (s *Syncer) receiveHeadersAnnouncements(ctx context.Context) error {
 					return
 				}
 
-				if errors.Is(errors.Protocol, err) || errors.Is(errors.Consensus, err) {
+				if errors.Is(err, errors.Protocol) || errors.Is(err, errors.Consensus) {
 					log.Warnf("Disconnecting peer %v: %v", rp, err)
 					rp.Disconnect(err)
 					return
@@ -841,6 +836,9 @@ FilterLoop:
 				// Disconnect peer when invalid.
 				err := validate.MerkleRoots(b)
 				if err != nil {
+					err = validate.DCP0005MerkleRoot(b)
+				}
+				if err != nil {
 					rp.Disconnect(err)
 					return nil, err
 				}
@@ -916,7 +914,7 @@ func (s *Syncer) handleBlockAnnouncements(ctx context.Context, rp *p2p.RemotePee
 		s.sidechainMu.Lock()
 
 		for i := range headers {
-			haveBlock, _, err := s.wallet.BlockInMainChain(blockHashes[i])
+			haveBlock, _, err := s.wallet.BlockInMainChain(ctx, blockHashes[i])
 			if err != nil {
 				return err
 			}
@@ -929,7 +927,7 @@ func (s *Syncer) handleBlockAnnouncements(ctx context.Context, rp *p2p.RemotePee
 			}
 		}
 
-		bestChain, err = s.wallet.EvaluateBestChain(&s.sidechains)
+		bestChain, err = s.wallet.EvaluateBestChain(ctx, &s.sidechains)
 		if err != nil {
 			return err
 		}
@@ -938,12 +936,12 @@ func (s *Syncer) handleBlockAnnouncements(ctx context.Context, rp *p2p.RemotePee
 			return nil
 		}
 
-		_, err = s.wallet.ValidateHeaderChainDifficulties(bestChain, 0)
+		_, err = s.wallet.ValidateHeaderChainDifficulties(ctx, bestChain, 0)
 		if err != nil {
 			return err
 		}
 
-		rpt, err := s.wallet.RescanPoint()
+		rpt, err := s.wallet.RescanPoint(ctx)
 		if err != nil {
 			return err
 		}
@@ -954,7 +952,7 @@ func (s *Syncer) handleBlockAnnouncements(ctx context.Context, rp *p2p.RemotePee
 			}
 		}
 
-		prevChain, err := s.wallet.ChainSwitch(&s.sidechains, bestChain, matchingTxs)
+		prevChain, err := s.wallet.ChainSwitch(ctx, &s.sidechains, bestChain, matchingTxs)
 		if err != nil {
 			return err
 		}
@@ -988,7 +986,7 @@ func (s *Syncer) handleBlockAnnouncements(ctx context.Context, rp *p2p.RemotePee
 	// Announced blocks not in the main chain are logged as sidechain or orphan
 	// blocks.
 	for _, n := range newBlocks {
-		haveBlock, _, err := s.wallet.BlockInMainChain(n.Hash)
+		haveBlock, _, err := s.wallet.BlockInMainChain(ctx, n.Hash)
 		if err != nil {
 			return err
 		}
@@ -1016,7 +1014,7 @@ func (s *Syncer) getHeaders(ctx context.Context, rp *p2p.RemotePeer) error {
 	locators = s.currentLocators
 	generation = s.locatorGeneration
 	if len(locators) == 0 {
-		locators, err = s.wallet.BlockLocators(nil)
+		locators, err = s.wallet.BlockLocators(ctx, nil)
 		if err != nil {
 			s.locatorMu.Unlock()
 			return err
@@ -1041,7 +1039,7 @@ func (s *Syncer) getHeaders(ctx context.Context, rp *p2p.RemotePeer) error {
 				// Peer may not have provided any headers if our own locators
 				// were up to date.  Compare the best locator hash with the
 				// advertised height.
-				h, err := s.wallet.BlockHeader(locators[0])
+				h, err := s.wallet.BlockHeader(ctx, locators[0])
 				if err == nil && int32(h.Height) < rp.InitialHeight() {
 					return errors.E(errors.Protocol, "peer did not provide "+
 						"headers through advertised height")
@@ -1076,7 +1074,7 @@ func (s *Syncer) getHeaders(ctx context.Context, rp *p2p.RemotePeer) error {
 		var added int
 		s.sidechainMu.Lock()
 		for _, n := range nodes {
-			haveBlock, _, _ := s.wallet.BlockInMainChain(n.Hash)
+			haveBlock, _, _ := s.wallet.BlockInMainChain(ctx, n.Hash)
 			if haveBlock {
 				continue
 			}
@@ -1092,7 +1090,7 @@ func (s *Syncer) getHeaders(ctx context.Context, rp *p2p.RemotePeer) error {
 				locators = s.currentLocators
 			}
 			if len(locators) == 0 {
-				locators, err = s.wallet.BlockLocators(nil)
+				locators, err = s.wallet.BlockLocators(ctx, nil)
 				if err != nil {
 					s.locatorMu.Unlock()
 					return err
@@ -1108,7 +1106,7 @@ func (s *Syncer) getHeaders(ctx context.Context, rp *p2p.RemotePeer) error {
 		log.Debugf("Fetched %d new header(s) ending at height %d from %v",
 			added, nodes[len(nodes)-1].Header.Height, rp)
 
-		bestChain, err := s.wallet.EvaluateBestChain(&s.sidechains)
+		bestChain, err := s.wallet.EvaluateBestChain(ctx, &s.sidechains)
 		if err != nil {
 			s.sidechainMu.Unlock()
 			return err
@@ -1118,13 +1116,13 @@ func (s *Syncer) getHeaders(ctx context.Context, rp *p2p.RemotePeer) error {
 			continue
 		}
 
-		_, err = s.wallet.ValidateHeaderChainDifficulties(bestChain, 0)
+		_, err = s.wallet.ValidateHeaderChainDifficulties(ctx, bestChain, 0)
 		if err != nil {
 			s.sidechainMu.Unlock()
 			return err
 		}
 
-		prevChain, err := s.wallet.ChainSwitch(&s.sidechains, bestChain, nil)
+		prevChain, err := s.wallet.ChainSwitch(ctx, &s.sidechains, bestChain, nil)
 		if err != nil {
 			s.sidechainMu.Unlock()
 			return err
@@ -1149,7 +1147,7 @@ func (s *Syncer) getHeaders(ctx context.Context, rp *p2p.RemotePeer) error {
 
 		// Generate new locators
 		s.locatorMu.Lock()
-		locators, err = s.wallet.BlockLocators(nil)
+		locators, err = s.wallet.BlockLocators(ctx, nil)
 		if err != nil {
 			s.locatorMu.Unlock()
 			return err
@@ -1163,7 +1161,7 @@ func (s *Syncer) getHeaders(ctx context.Context, rp *p2p.RemotePeer) error {
 func (s *Syncer) startupSync(ctx context.Context, rp *p2p.RemotePeer) error {
 	// Disconnect from the peer if their advertised block height is
 	// significantly behind the wallet's.
-	_, tipHeight := s.wallet.MainChainTip()
+	_, tipHeight := s.wallet.MainChainTip(ctx)
 	if rp.InitialHeight() < tipHeight-6 {
 		return errors.E("peer is not synced")
 	}
@@ -1190,7 +1188,7 @@ func (s *Syncer) startupSync(ctx context.Context, rp *p2p.RemotePeer) error {
 
 	if atomic.CompareAndSwapUint32(&s.atomicCatchUpTryLock, 0, 1) {
 		err = func() error {
-			rescanPoint, err := s.wallet.RescanPoint()
+			rescanPoint, err := s.wallet.RescanPoint(ctx)
 			if err != nil {
 				return err
 			}
@@ -1227,7 +1225,7 @@ func (s *Syncer) startupSync(ctx context.Context, rp *p2p.RemotePeer) error {
 
 			s.rescanStart()
 
-			rescanBlock, err := s.wallet.BlockHeader(rescanPoint)
+			rescanBlock, err := s.wallet.BlockHeader(ctx, rescanPoint)
 			if err != nil {
 				return err
 			}
@@ -1252,7 +1250,7 @@ func (s *Syncer) startupSync(ctx context.Context, rp *p2p.RemotePeer) error {
 		}
 	}
 
-	unminedTxs, err := s.wallet.UnminedTransactions()
+	unminedTxs, err := s.wallet.UnminedTransactions(ctx)
 	if err != nil {
 		log.Errorf("Cannot load unmined transactions for resending: %v", err)
 		return nil

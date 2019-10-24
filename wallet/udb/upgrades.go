@@ -5,6 +5,7 @@
 package udb
 
 import (
+	"context"
 	"crypto/sha256"
 
 	"github.com/decred/dcrd/blockchain/stake/v2"
@@ -14,7 +15,7 @@ import (
 	"github.com/decred/dcrd/hdkeychain/v2"
 	"github.com/decred/dcrd/txscript/v2"
 	"github.com/decred/dcrd/wire"
-	"github.com/decred/dcrwallet/errors"
+	"github.com/decred/dcrwallet/errors/v2"
 	"github.com/decred/dcrwallet/wallet/v3/internal/compat"
 	"github.com/decred/dcrwallet/wallet/v3/internal/snacl"
 	"github.com/decred/dcrwallet/wallet/v3/walletdb"
@@ -110,10 +111,21 @@ const (
 	// accounting of total locked funds.
 	ticketCommitmentsVersion = 12
 
+	// importedXpubAccountVersion is the thirteenth version of the
+	// database.  It introduces the ability to import and track child
+	// indexes of arbitrary HD extended public keys.  Imported xpub accounts
+	// are associated with a uint32 value in the upper range (above
+	// ImportedAddrAccount).  The upgrade does not add or remove any
+	// required keys (the upgrade is done in a backwards-compatible way) but
+	// the database version is bumped to prevent older software from using
+	// an upgraded database with account identifiers that would induce
+	// panics.
+	importedXpubAccountVersion = 13
+
 	// DBVersion is the latest version of the database that is understood by the
 	// program.  Databases with recorded versions higher than this will fail to
 	// open (meaning any upgrades prevent reverting to older software).
-	DBVersion = ticketCommitmentsVersion
+	DBVersion = importedXpubAccountVersion
 )
 
 // upgrades maps between old database versions and the upgrade function to
@@ -131,6 +143,7 @@ var upgrades = [...]func(walletdb.ReadWriteTx, []byte, *chaincfg.Params) error{
 	cfVersion - 1:                    cfUpgrade,
 	lastProcessedTxsBlockVersion - 1: lastProcessedTxsBlockUpgrade,
 	ticketCommitmentsVersion - 1:     ticketCommitmentsUpgrade,
+	importedXpubAccountVersion - 1:   importedXpubAccountUpgrade,
 }
 
 func lastUsedAddressIndexUpgrade(tx walletdb.ReadWriteTx, publicPassphrase []byte, params *chaincfg.Params) error {
@@ -221,7 +234,7 @@ func lastUsedAddressIndexUpgrade(tx walletdb.ReadWriteTx, publicPassphrase []byt
 		lastUsedIntIndex := ^uint32(0)
 		for child := uint32(0); child < hdkeychain.HardenedKeyStart; child++ {
 			xpubChild, err := xpubExtBranch.Child(child)
-			if err == hdkeychain.ErrInvalidChild {
+			if errors.Is(err, hdkeychain.ErrInvalidChild) {
 				continue
 			}
 			if err != nil {
@@ -244,7 +257,7 @@ func lastUsedAddressIndexUpgrade(tx walletdb.ReadWriteTx, publicPassphrase []byt
 		for child := uint32(0); child < hdkeychain.HardenedKeyStart; child++ {
 			// Same as above but search the internal branch.
 			xpubChild, err := xpubIntBranch.Child(child)
-			if err == hdkeychain.ErrInvalidChild {
+			if errors.Is(err, hdkeychain.ErrInvalidChild) {
 				continue
 			}
 			if err != nil {
@@ -860,7 +873,7 @@ func ticketCommitmentsUpgrade(tx walletdb.ReadWriteTx, publicPassphrase []byte, 
 
 				acct, err := fetchAddrAccount(addrmgrBucket,
 					normalizeAddress(addr).ScriptAddress())
-				if err != nil && errors.Is(errors.NotExist, err) {
+				if err != nil && errors.Is(err, errors.NotExist) {
 					// If this address does not have an account associated
 					// with it, it means it's not owned by the wallet.
 					continue
@@ -994,11 +1007,30 @@ func ticketCommitmentsUpgrade(tx walletdb.ReadWriteTx, publicPassphrase []byte, 
 	return unifiedDBMetadata{}.putVersion(metadataBucket, newVersion)
 }
 
+func importedXpubAccountUpgrade(tx walletdb.ReadWriteTx, publicPassphrase []byte, params *chaincfg.Params) error {
+	const oldVersion = 12
+	const newVersion = 13
+
+	metadataBucket := tx.ReadWriteBucket(unifiedDBMetadata{}.rootBucketKey())
+
+	// Assert that this function is only called on version 12 databases.
+	dbVersion, err := unifiedDBMetadata{}.getVersion(metadataBucket)
+	if err != nil {
+		return err
+	}
+	if dbVersion != oldVersion {
+		return errors.E(errors.Invalid, "importedXpubAccountUpgrade inappropriately called")
+	}
+
+	// Write the new database version.
+	return unifiedDBMetadata{}.putVersion(metadataBucket, newVersion)
+}
+
 // Upgrade checks whether the any upgrades are necessary before the database is
 // ready for application usage.  If any are, they are performed.
-func Upgrade(db walletdb.DB, publicPassphrase []byte, params *chaincfg.Params) error {
+func Upgrade(ctx context.Context, db walletdb.DB, publicPassphrase []byte, params *chaincfg.Params) error {
 	var version uint32
-	err := walletdb.View(db, func(tx walletdb.ReadTx) error {
+	err := walletdb.View(ctx, db, func(tx walletdb.ReadTx) error {
 		var err error
 		metadataBucket := tx.ReadBucket(unifiedDBMetadata{}.rootBucketKey())
 		if metadataBucket == nil {
@@ -1020,7 +1052,7 @@ func Upgrade(db walletdb.DB, publicPassphrase []byte, params *chaincfg.Params) e
 
 	log.Infof("Upgrading database from version %d to %d", version, DBVersion)
 
-	return walletdb.Update(db, func(tx walletdb.ReadWriteTx) error {
+	return walletdb.Update(ctx, db, func(tx walletdb.ReadWriteTx) error {
 		// Execute all necessary upgrades in order.
 		for _, upgrade := range upgrades[version:] {
 			err := upgrade(tx, publicPassphrase, params)

@@ -15,15 +15,16 @@ import (
 	"io/ioutil"
 	"net"
 	"net/http"
+	"runtime/trace"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"decred.org/dcrwallet/internal/loader"
 	"github.com/decred/dcrd/chaincfg/v2"
 	"github.com/decred/dcrd/dcrjson/v3"
 	dcrdtypes "github.com/decred/dcrd/rpc/jsonrpc/types"
-	"github.com/decred/dcrwallet/errors"
-	"github.com/decred/dcrwallet/loader"
+	"github.com/decred/dcrwallet/errors/v2"
 	"github.com/decred/dcrwallet/rpc/jsonrpc/types"
 	"github.com/gorilla/websocket"
 )
@@ -67,8 +68,7 @@ type Server struct {
 	authsha      [sha256.Size]byte
 	upgrader     websocket.Upgrader
 
-	maxPostClients      int64 // Max concurrent HTTP POST clients.
-	maxWebsocketClients int64 // Max concurrent websocket clients.
+	cfg Options
 
 	wg      sync.WaitGroup
 	quit    chan struct{}
@@ -86,7 +86,7 @@ type handler struct {
 
 // jsonAuthFail sends a message back to the client if the http auth is rejected.
 func jsonAuthFail(w http.ResponseWriter) {
-	w.Header().Add("WWW-Authenticate", `Basic realm="btcwallet RPC"`)
+	w.Header().Add("WWW-Authenticate", `Basic realm="dcrwallet RPC"`)
 	http.Error(w, "401 Unauthorized.", http.StatusUnauthorized)
 }
 
@@ -103,10 +103,9 @@ func NewServer(opts *Options, activeNet *chaincfg.Params, walletLoader *loader.L
 			// handshake within the allowed timeframe.
 			ReadTimeout: time.Second * rpcAuthTimeoutSeconds,
 		},
-		walletLoader:        walletLoader,
-		maxPostClients:      opts.MaxPOSTClients,
-		maxWebsocketClients: opts.MaxWebsocketClients,
-		listeners:           listeners,
+		walletLoader: walletLoader,
+		cfg:          *opts,
+		listeners:    listeners,
 		// A hash of the HTTP basic auth string is used for a constant
 		// time comparison.
 		authsha: sha256.Sum256(httpBasicAuth(opts.Username, opts.Password)),
@@ -325,7 +324,7 @@ func (s *Server) websocketClientRead(ctx context.Context, wsc *websocketClient) 
 	for {
 		_, request, err := wsc.conn.ReadMessage()
 		if err != nil {
-			if err != io.EOF && err != io.ErrUnexpectedEOF {
+			if !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
 				log.Warnf("Websocket receive failed from client %s: %v",
 					remoteAddr(ctx), err)
 			}
@@ -428,9 +427,11 @@ out:
 
 			default:
 				req := req // Copy for the closure
+				ctx, task := trace.NewTask(ctx, req.Method)
 				f := s.handlerClosure(ctx, &req)
 				wsc.wg.Add(1)
 				go func() {
+					defer task.End()
 					resp, jsonErr := f()
 					mresp, err := dcrjson.MarshalResponse(req.Jsonrpc, req.ID, resp, jsonErr)
 					if err != nil {
@@ -550,6 +551,9 @@ func (s *Server) postClientRPC(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+
+	ctx, task := trace.NewTask(ctx, req.Method)
+	defer task.End()
 
 	// Create the response and error from the request.  Two special cases
 	// are handled for the authenticate and stop request methods.

@@ -15,7 +15,7 @@ import (
 	"github.com/decred/dcrd/gcs/blockcf"
 	hd "github.com/decred/dcrd/hdkeychain/v2"
 	"github.com/decred/dcrd/wire"
-	"github.com/decred/dcrwallet/errors"
+	"github.com/decred/dcrwallet/errors/v2"
 	"github.com/decred/dcrwallet/rpc/client/dcrd"
 	"github.com/decred/dcrwallet/validate"
 	"github.com/decred/dcrwallet/wallet/v3/udb"
@@ -87,6 +87,7 @@ func cacheMissingCommitments(ctx context.Context, p Peer, cache blockCommitmentC
 }
 
 type accountUsage struct {
+	account        uint32
 	extkey, intkey *hd.ExtendedKey
 	extLastUsed    uint32
 	intLastUsed    uint32
@@ -107,21 +108,25 @@ type addrFinder struct {
 	mu          sync.RWMutex
 }
 
-func newAddrFinder(w *Wallet) (*addrFinder, error) {
+func newAddrFinder(ctx context.Context, w *Wallet) (*addrFinder, error) {
 	a := &addrFinder{
 		w:           w,
 		gaplimit:    uint32(w.gapLimit),
 		segments:    hd.HardenedKeyStart / uint32(w.gapLimit),
 		commitments: make(blockCommitmentCache),
 	}
-	err := walletdb.View(w.db, func(dbtx walletdb.ReadTx) error {
+	err := walletdb.View(ctx, w.db, func(dbtx walletdb.ReadTx) error {
 		ns := dbtx.ReadBucket(waddrmgrNamespaceKey)
 		lastAcct, err := w.Manager.LastAccount(ns)
 		if err != nil {
 			return err
 		}
-		a.usage = make([]accountUsage, lastAcct+1)
-		for acct := uint32(0); acct <= lastAcct; acct++ {
+		lastImported, err := w.Manager.LastImportedAccount(dbtx)
+		if err != nil {
+			return err
+		}
+		a.usage = make([]accountUsage, 0, lastAcct+1+lastImported-udb.ImportedAddrAccount)
+		addUsage := func(acct uint32) error {
 			extkey, err := w.Manager.AccountBranchExtendedPubKey(dbtx, acct, 0)
 			if err != nil {
 				return err
@@ -141,7 +146,8 @@ func newAddrFinder(w *Wallet) (*addrFinder, error) {
 			if props.LastUsedInternalIndex != ^uint32(0) {
 				intlo = props.LastUsedInternalIndex / a.gaplimit
 			}
-			a.usage[acct] = accountUsage{
+			a.usage = append(a.usage, accountUsage{
+				account:     acct,
 				extkey:      extkey,
 				intkey:      intkey,
 				extLastUsed: props.LastUsedExternalIndex,
@@ -150,6 +156,17 @@ func newAddrFinder(w *Wallet) (*addrFinder, error) {
 				exthi:       a.segments - 1,
 				intlo:       intlo,
 				inthi:       a.segments - 1,
+			})
+			return nil
+		}
+		for acct := uint32(0); acct <= lastAcct; acct++ {
+			if err := addUsage(acct); err != nil {
+				return err
+			}
+		}
+		for acct := uint32(udb.ImportedAddrAccount + 1); acct <= lastImported; acct++ {
+			if err := addUsage(acct); err != nil {
+				return err
 			}
 		}
 		return nil
@@ -160,7 +177,7 @@ func newAddrFinder(w *Wallet) (*addrFinder, error) {
 func (a *addrFinder) find(ctx context.Context, start *chainhash.Hash, p Peer) error {
 	// Load main chain cfilters beginning with start.
 	var fs []*udb.BlockCFilter
-	err := walletdb.View(a.w.db, func(dbtx walletdb.ReadTx) error {
+	err := walletdb.View(ctx, a.w.db, func(dbtx walletdb.ReadTx) error {
 		ns := dbtx.ReadBucket(wtxmgrNamespaceKey)
 		h, err := a.w.TxStore.GetBlockHeader(dbtx, start)
 		if err != nil {
@@ -210,13 +227,12 @@ func (a *addrFinder) find(ctx context.Context, start *chainhash.Hash, p Peer) er
 			return nil
 		}
 		for i := range a.usage {
-			acct := uint32(i)
 			u := &a.usage[i]
-			err = addBranch(u.extkey, acct, 0, u.extlo, u.exthi)
+			err = addBranch(u.extkey, u.account, 0, u.extlo, u.exthi)
 			if err != nil {
 				return err
 			}
-			err = addBranch(u.intkey, acct, 1, u.intlo, u.inthi)
+			err = addBranch(u.intkey, u.account, 1, u.intlo, u.inthi)
 			if err != nil {
 				return err
 			}
@@ -332,6 +348,9 @@ func (a *addrFinder) filter(ctx context.Context, fs []*udb.BlockCFilter, data bl
 					// validate blocks
 					err := validate.MerkleRoots(b)
 					if err != nil {
+						err = validate.DCP0005MerkleRoot(b)
+					}
+					if err != nil {
 						return err
 					}
 					err = validate.RegularCFilter(b, fs[fetchidx[i]].Filter)
@@ -389,7 +408,7 @@ func (w *Wallet) filterBlocks(ctx context.Context, startBlock *chainhash.Hash, d
 		}
 		storage := make([]*udb.BlockCFilter, 2000)
 		var filters []*udb.BlockCFilter
-		err := walletdb.View(w.db, func(dbtx walletdb.ReadTx) error {
+		err := walletdb.View(ctx, w.db, func(dbtx walletdb.ReadTx) error {
 			var err error
 			filters, err = w.TxStore.GetMainChainCFilters(dbtx, startHash,
 				inclusive, storage)
@@ -686,7 +705,7 @@ func (f *existsAddrIndexFinder) find(ctx context.Context, finder *addrFinder) er
 	var g errgroup.Group
 	lastUsed := func(acct, branch uint32, index *uint32) error {
 		var k *hd.ExtendedKey
-		err := walletdb.View(f.wallet.db, func(tx walletdb.ReadTx) error {
+		err := walletdb.View(ctx, f.wallet.db, func(tx walletdb.ReadTx) error {
 			var err error
 			k, err = f.wallet.Manager.AccountBranchExtendedPubKey(tx, acct, branch)
 			return err
@@ -702,8 +721,8 @@ func (f *existsAddrIndexFinder) find(ctx context.Context, finder *addrFinder) er
 		return nil
 	}
 	for i := range finder.usage {
-		acct := uint32(i)
 		u := &finder.usage[i]
+		acct := u.account
 		g.Go(func() error { return lastUsed(acct, 0, &u.extLastUsed) })
 		g.Go(func() error { return lastUsed(acct, 1, &u.intLastUsed) })
 	}
@@ -733,10 +752,10 @@ func (w *Wallet) DiscoverActiveAddresses(ctx context.Context, p Peer, startBlock
 	_, slip0044CoinType := udb.CoinTypes(w.chainParams)
 	var activeCoinType uint32
 	var coinTypeKnown, isSLIP0044CoinType bool
-	err := walletdb.View(w.db, func(dbtx walletdb.ReadTx) error {
+	err := walletdb.View(ctx, w.db, func(dbtx walletdb.ReadTx) error {
 		var err error
 		activeCoinType, err = w.Manager.CoinType(dbtx)
-		if errors.Is(errors.WatchingOnly, err) {
+		if errors.Is(err, errors.WatchingOnly) {
 			return nil
 		}
 		if err != nil {
@@ -768,7 +787,7 @@ func (w *Wallet) DiscoverActiveAddresses(ctx context.Context, p Peer, startBlock
 				coinTypePrivKey.Zero()
 			}
 		}()
-		err := walletdb.View(w.db, func(tx walletdb.ReadTx) error {
+		err := walletdb.View(ctx, w.db, func(tx walletdb.ReadTx) error {
 			var err error
 			coinTypePrivKey, err = w.Manager.CoinTypePrivKey(tx)
 			return err
@@ -791,7 +810,7 @@ func (w *Wallet) DiscoverActiveAddresses(ctx context.Context, p Peer, startBlock
 			var lastRecorded uint32
 			acctXpubs := make(map[uint32]*hd.ExtendedKey)
 			w.addressBuffersMu.Lock()
-			err := walletdb.Update(w.db, func(tx walletdb.ReadWriteTx) error {
+			err := walletdb.Update(ctx, w.db, func(tx walletdb.ReadWriteTx) error {
 				ns := tx.ReadWriteBucket(waddrmgrNamespaceKey)
 				var err error
 				lastRecorded, err = w.Manager.LastAccount(ns)
@@ -835,24 +854,13 @@ func (w *Wallet) DiscoverActiveAddresses(ctx context.Context, p Peer, startBlock
 		}
 	}
 
-	var lastAcct uint32
-	err = walletdb.View(w.db, func(tx walletdb.ReadTx) error {
-		ns := tx.ReadBucket(waddrmgrNamespaceKey)
-		var err error
-		lastAcct, err = w.Manager.LastAccount(ns)
-		return err
-	})
-	if err != nil {
-		return errors.E(op, err)
-	}
-
 	// Discover address usage within known accounts
 	// Usage recorded in finder.usage
-	log.Infof("Discovering used addresses for %d account(s)", lastAcct+1)
-	finder, err := newAddrFinder(w)
+	finder, err := newAddrFinder(ctx, w)
 	if err != nil {
 		return errors.E(op, err)
 	}
+	log.Infof("Discovering used addresses for %d account(s)", len(finder.usage))
 	lastUsed := append([]accountUsage(nil), finder.usage...)
 	rpc, ok := rpcFromPeer(p)
 	if ok {
@@ -867,7 +875,7 @@ func (w *Wallet) DiscoverActiveAddresses(ctx context.Context, p Peer, startBlock
 	for i := range finder.usage {
 		u := &finder.usage[i]
 		log.Infof("Account %d next child indexes: external:%d internal:%d",
-			i, u.extLastUsed+1, u.intLastUsed+1)
+			u.account, u.extLastUsed+1, u.intLastUsed+1)
 	}
 
 	// Save discovered addresses for each account plus additional future
@@ -877,7 +885,7 @@ func (w *Wallet) DiscoverActiveAddresses(ctx context.Context, p Peer, startBlock
 	gapLimit := uint32(w.gapLimit)
 	for i := range finder.usage {
 		u := &finder.usage[i]
-		acct := uint32(i)
+		acct := u.account
 
 		const N = 256
 		max := u.extLastUsed + gapLimit
@@ -890,7 +898,7 @@ func (w *Wallet) DiscoverActiveAddresses(ctx context.Context, p Peer, startBlock
 			if to > max {
 				to = max
 			}
-			err = walletdb.Update(w.db, func(dbtx walletdb.ReadWriteTx) error {
+			err = walletdb.Update(ctx, w.db, func(dbtx walletdb.ReadWriteTx) error {
 				ns := dbtx.ReadWriteBucket(waddrmgrNamespaceKey)
 				return w.Manager.SyncAccountToAddrIndex(ns, acct, to, 0)
 			})
@@ -912,7 +920,7 @@ func (w *Wallet) DiscoverActiveAddresses(ctx context.Context, p Peer, startBlock
 			if to > max {
 				to = max
 			}
-			err = walletdb.Update(w.db, func(dbtx walletdb.ReadWriteTx) error {
+			err = walletdb.Update(ctx, w.db, func(dbtx walletdb.ReadWriteTx) error {
 				ns := dbtx.ReadWriteBucket(waddrmgrNamespaceKey)
 				return w.Manager.SyncAccountToAddrIndex(ns, acct, to, 1)
 			})
@@ -924,7 +932,7 @@ func (w *Wallet) DiscoverActiveAddresses(ctx context.Context, p Peer, startBlock
 			}
 		}
 
-		err = walletdb.Update(w.db, func(dbtx walletdb.ReadWriteTx) error {
+		err = walletdb.Update(ctx, w.db, func(dbtx walletdb.ReadWriteTx) error {
 			ns := dbtx.ReadBucket(waddrmgrNamespaceKey)
 			if u.extLastUsed < hd.HardenedKeyStart {
 				err = w.Manager.MarkUsedChildIndex(dbtx, acct, 0, u.extLastUsed)
@@ -984,7 +992,7 @@ func (w *Wallet) DiscoverActiveAddresses(ctx context.Context, p Peer, startBlock
 	// Upgrade the coin type.
 	log.Infof("Upgrading wallet from legacy coin type %d to SLIP0044 coin type %d",
 		activeCoinType, slip0044CoinType)
-	err = w.UpgradeToSLIP0044CoinType()
+	err = w.UpgradeToSLIP0044CoinType(ctx)
 	if err != nil {
 		log.Errorf("Coin type upgrade failed: %v", err)
 		log.Warnf("Continuing with legacy BIP0044 coin type -- seed restores " +

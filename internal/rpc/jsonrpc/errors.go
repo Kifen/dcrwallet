@@ -9,7 +9,7 @@ import (
 	"fmt"
 
 	"github.com/decred/dcrd/dcrjson/v3"
-	"github.com/decred/dcrwallet/errors"
+	"github.com/decred/dcrwallet/errors/v2"
 )
 
 func convertError(err error) *dcrjson.RPCError {
@@ -18,8 +18,9 @@ func convertError(err error) *dcrjson.RPCError {
 	}
 
 	code := dcrjson.ErrRPCWallet
-	if err, ok := err.(*errors.Error); ok {
-		switch err.Kind {
+	var kind errors.Kind
+	if errors.As(err, &kind) {
+		switch kind {
 		case errors.Bug:
 			code = dcrjson.ErrRPCInternal.Code
 		case errors.Encoding:

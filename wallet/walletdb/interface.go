@@ -9,9 +9,11 @@
 package walletdb
 
 import (
+	"context"
 	"io"
+	"runtime/trace"
 
-	"github.com/decred/dcrwallet/errors"
+	"github.com/decred/dcrwallet/errors/v2"
 )
 
 // ReadTx represents a database transaction that can only be used for reads.  If
@@ -195,11 +197,15 @@ type DB interface {
 // transaction passed as a parameter.  After f exits or panics, the transaction
 // is rolled back.  If f errors, its error is returned, not a rollback error (if
 // any occurred).
-func View(db DB, f func(tx ReadTx) error) error {
+func View(ctx context.Context, db DB, f func(tx ReadTx) error) error {
+	defer trace.StartRegion(ctx, "db.View").End()
+
 	tx, err := db.BeginReadTx()
 	if err != nil {
 		return err
 	}
+
+	defer trace.StartRegion(ctx, "db.ReadTx").End()
 
 	// Rollback the transaction after f returns or panics.  Do not recover from
 	// any panic to keep the original stack trace intact.
@@ -218,11 +224,15 @@ func View(db DB, f func(tx ReadTx) error) error {
 // error, the transaction is committed.  Otherwise, if f did error or panic, the
 // transaction is rolled back.  If a rollback fails, the original error returned
 // by f is still returned.  If the commit fails, the commit error is returned.
-func Update(db DB, f func(tx ReadWriteTx) error) (err error) {
+func Update(ctx context.Context, db DB, f func(tx ReadWriteTx) error) (err error) {
+	defer trace.StartRegion(ctx, "db.Update").End()
+
 	tx, err := db.BeginReadWriteTx()
 	if err != nil {
 		return err
 	}
+
+	defer trace.StartRegion(ctx, "db.ReadWriteTx").End()
 
 	// Commit or rollback the transaction after f returns or panics.  Do not
 	// recover from the panic to keep the original stack trace intact.

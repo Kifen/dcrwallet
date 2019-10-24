@@ -16,10 +16,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/decred/dcrwallet/errors"
-	"github.com/decred/dcrwallet/loader"
-	"github.com/decred/dcrwallet/rpc/jsonrpc"
-	"github.com/decred/dcrwallet/rpc/rpcserver"
+	"decred.org/dcrwallet/internal/loader"
+	"decred.org/dcrwallet/internal/rpc/jsonrpc"
+	"decred.org/dcrwallet/internal/rpc/rpcserver"
+	"github.com/decred/dcrwallet/errors/v2"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -181,6 +181,11 @@ func startRPCServers(walletLoader *loader.Loader) (*grpc.Server, *jsonrpc.Server
 			Password:            cfg.Password,
 			MaxPOSTClients:      cfg.LegacyRPCMaxClients,
 			MaxWebsocketClients: cfg.LegacyRPCMaxWebsockets,
+			CSPPServer:          cfg.CSPPServer,
+			DialCSPPServer:      cfg.dialCSPPServer,
+			MixAccount:          cfg.mixedAccount,
+			MixBranch:           cfg.mixedBranch,
+			MixChangeAccount:    cfg.ChangeAccount,
 		}
 		jsonrpcServer = jsonrpc.NewServer(&opts, activeNet.Params, walletLoader, listeners)
 		for _, lis := range listeners {

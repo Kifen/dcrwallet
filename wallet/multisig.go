@@ -5,11 +5,14 @@
 package wallet
 
 import (
+	"context"
+	"runtime/trace"
+
 	"github.com/decred/dcrd/dcrec"
 	"github.com/decred/dcrd/dcrutil/v2"
 	"github.com/decred/dcrd/txscript/v2"
 	"github.com/decred/dcrd/wire"
-	"github.com/decred/dcrwallet/errors"
+	"github.com/decred/dcrwallet/errors/v2"
 	"github.com/decred/dcrwallet/wallet/v3/internal/txsizes"
 	"github.com/decred/dcrwallet/wallet/v3/txrules"
 	"github.com/decred/dcrwallet/wallet/v3/udb"
@@ -23,7 +26,7 @@ import (
 //
 // This function only works with secp256k1 pubkeys and P2PKH addresses derived
 // from them.
-func (w *Wallet) MakeSecp256k1MultiSigScript(secp256k1Addrs []dcrutil.Address, nRequired int) ([]byte, error) {
+func (w *Wallet) MakeSecp256k1MultiSigScript(ctx context.Context, secp256k1Addrs []dcrutil.Address, nRequired int) ([]byte, error) {
 	const op errors.Op = "wallet.MakeSecp256k1MultiSigScript"
 
 	secp256k1PubKeys := make([]*dcrutil.AddressSecpPubKey, len(secp256k1Addrs))
@@ -54,10 +57,12 @@ func (w *Wallet) MakeSecp256k1MultiSigScript(secp256k1Addrs []dcrutil.Address, n
 
 			if dbtx == nil {
 				var err error
+				defer trace.StartRegion(ctx, "db.View").End()
 				dbtx, err = w.db.BeginReadTx()
 				if err != nil {
 					return nil, err
 				}
+				defer trace.StartRegion(ctx, "db.ReadTx").End()
 				addrmgrNs = dbtx.ReadBucket(waddrmgrNamespaceKey)
 			}
 			addrInfo, err := w.Manager.Address(addrmgrNs, addr)
@@ -84,11 +89,11 @@ func (w *Wallet) MakeSecp256k1MultiSigScript(secp256k1Addrs []dcrutil.Address, n
 }
 
 // ImportP2SHRedeemScript adds a P2SH redeem script to the wallet.
-func (w *Wallet) ImportP2SHRedeemScript(script []byte) (*dcrutil.AddressScriptHash, error) {
+func (w *Wallet) ImportP2SHRedeemScript(ctx context.Context, script []byte) (*dcrutil.AddressScriptHash, error) {
 	const op errors.Op = "wallet.ImportP2SHRedeemScript"
 
 	var p2shAddr *dcrutil.AddressScriptHash
-	err := walletdb.Update(w.db, func(tx walletdb.ReadWriteTx) error {
+	err := walletdb.Update(ctx, w.db, func(tx walletdb.ReadWriteTx) error {
 		addrmgrNs := tx.ReadWriteBucket(waddrmgrNamespaceKey)
 		txmgrNs := tx.ReadWriteBucket(wtxmgrNamespaceKey)
 
@@ -102,7 +107,7 @@ func (w *Wallet) ImportP2SHRedeemScript(script []byte) (*dcrutil.AddressScriptHa
 			// Don't care if it's already there, but still have to
 			// set the p2shAddr since the address manager didn't
 			// return anything useful.
-			if errors.Is(errors.Exist, err) {
+			if errors.Is(err, errors.Exist) {
 				// This function will never error as it always
 				// hashes the script to the correct length.
 				p2shAddr, _ = dcrutil.NewAddressScriptHash(script,
@@ -123,14 +128,14 @@ func (w *Wallet) ImportP2SHRedeemScript(script []byte) (*dcrutil.AddressScriptHa
 
 // FetchP2SHMultiSigOutput fetches information regarding a wallet's P2SH
 // multi-signature output.
-func (w *Wallet) FetchP2SHMultiSigOutput(outPoint *wire.OutPoint) (*P2SHMultiSigOutput, error) {
+func (w *Wallet) FetchP2SHMultiSigOutput(ctx context.Context, outPoint *wire.OutPoint) (*P2SHMultiSigOutput, error) {
 	const op errors.Op = "wallet.FetchP2SHMultiSigOutput"
 
 	var (
 		mso          *udb.MultisigOut
 		redeemScript []byte
 	)
-	err := walletdb.View(w.db, func(tx walletdb.ReadTx) error {
+	err := walletdb.View(ctx, w.db, func(tx walletdb.ReadTx) error {
 		txmgrNs := tx.ReadBucket(wtxmgrNamespaceKey)
 		var err error
 
@@ -177,11 +182,11 @@ func (w *Wallet) FetchP2SHMultiSigOutput(outPoint *wire.OutPoint) (*P2SHMultiSig
 }
 
 // FetchAllRedeemScripts returns all P2SH redeem scripts saved by the wallet.
-func (w *Wallet) FetchAllRedeemScripts() ([][]byte, error) {
+func (w *Wallet) FetchAllRedeemScripts(ctx context.Context) ([][]byte, error) {
 	const op errors.Op = "wallet.FetchAllRedeemScripts"
 
 	var redeemScripts [][]byte
-	err := walletdb.View(w.db, func(dbtx walletdb.ReadTx) error {
+	err := walletdb.View(ctx, w.db, func(dbtx walletdb.ReadTx) error {
 		txmgrNs := dbtx.ReadBucket(wtxmgrNamespaceKey)
 		redeemScripts = w.TxStore.StoredTxScripts(txmgrNs)
 		return nil
